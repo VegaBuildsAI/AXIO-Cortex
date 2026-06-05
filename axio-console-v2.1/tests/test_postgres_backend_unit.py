@@ -1,0 +1,89 @@
+import unittest
+
+from core.memory_backends.postgres_backend import PostgresMemoryBackend
+
+
+class FakeCursor:
+    def __init__(self):
+        self.calls = []
+        self.rows = []
+        self.row = None
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+    def fetchall(self):
+        return self.rows
+
+    def fetchone(self):
+        return self.row
+
+
+class FakeConnection:
+    def __init__(self):
+        self.cursor_obj = FakeCursor()
+        self.commits = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql, params=None):
+        self.cursor_obj.execute(sql, params)
+        return self.cursor_obj
+
+    def commit(self):
+        self.commits += 1
+
+
+class PostgresMemoryBackendUnitTests(unittest.TestCase):
+    def test_update_facts_upserts_each_key(self):
+        conn = FakeConnection()
+        backend = PostgresMemoryBackend("chat", connection_factory=lambda: conn)
+
+        backend.update_facts({"user_name": "Michael", "notes": ["AXIO"]})
+
+        executed_sql = "\n".join(call[0] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO memory_facts", executed_sql)
+        self.assertIn("ON CONFLICT (mode, key)", executed_sql)
+        self.assertEqual(conn.commits, 1)
+
+    def test_get_facts_returns_key_value_dict(self):
+        conn = FakeConnection()
+        conn.cursor_obj.rows = [
+            {"key": "user_name", "value": "Michael"},
+            {"key": "notes", "value": ["AXIO"]},
+        ]
+        backend = PostgresMemoryBackend("chat", connection_factory=lambda: conn)
+
+        facts = backend.get_facts()
+
+        self.assertEqual(facts["user_name"], "Michael")
+        self.assertEqual(facts["notes"], ["AXIO"])
+
+    def test_store_chunk_rejects_wrong_embedding_dimension(self):
+        conn = FakeConnection()
+        backend = PostgresMemoryBackend("chat", connection_factory=lambda: conn)
+
+        with self.assertRaises(ValueError):
+            backend.store_chunk("summary", [0.1, 0.2], {"mode": "chat"})
+
+    def test_recall_orders_by_vector_distance(self):
+        conn = FakeConnection()
+        conn.cursor_obj.rows = [
+            {"content": "Past AXIO session", "metadata": {"mode": "chat"}, "distance": 0.2}
+        ]
+        backend = PostgresMemoryBackend("chat", connection_factory=lambda: conn)
+
+        rows = backend.recall([0.0] * 768, n_results=3)
+
+        self.assertEqual(rows[0]["text"], "Past AXIO session")
+        self.assertEqual(rows[0]["distance"], 0.2)
+        executed_sql = "\n".join(call[0] for call in conn.cursor_obj.calls)
+        self.assertIn("embedding <=>", executed_sql)
+
+
+if __name__ == "__main__":
+    unittest.main()
