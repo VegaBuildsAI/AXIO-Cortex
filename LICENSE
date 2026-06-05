@@ -1,0 +1,30 @@
+Copyright (c) 2026 VegaBuildsAI. All rights reserved.
+
+PROPRIETARY AND CONFIDENTIAL
+
+This repository and its contents (the "Work") - including the AXIO Cortex
+console, IOAF memory architecture, model routing configuration, agent modes,
+benchmark engine, revenue recognition workflows, prompts, scripts, examples,
+and all accompanying documentation - are proprietary and confidential to
+VegaBuildsAI.
+
+No part of the Work may be reproduced, distributed, published, sublicensed,
+or used to create derivative works, in whole or in part, by any means, without
+the prior written permission of VegaBuildsAI, except as expressly permitted in
+writing.
+
+Permission is granted to the repository owner and to collaborators expressly
+invited by the owner to view and use the Work internally for the purpose of
+developing, testing, operating, and improving AXIO Cortex.
+
+The Work integrates local model orchestration, optional Claude API escalation,
+stateful memory, and domain-specific agent workflows. References to third-party
+models, APIs, frameworks, accounting standards, or tools do not imply
+endorsement by, affiliation with, or ownership by those third parties.
+
+THE WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH THE WORK OR THE USE OR
+OTHER DEALINGS IN THE WORK.
