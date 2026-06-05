@@ -33,6 +33,7 @@ try:
     from .config import (
         MEMORY_DIR, CHROMA_DIR, OLLAMA_HOST,
         MEMORY_RECALL_RESULTS, MEMORY_SUMMARIZE, MEMORY_SUMMARY_MODEL,
+        AXIO_MEMORY_BACKEND,
     )
 except ImportError:
     MEMORY_DIR            = Path.home() / ".axio" / "memory"
@@ -41,6 +42,7 @@ except ImportError:
     MEMORY_RECALL_RESULTS = 5
     MEMORY_SUMMARIZE      = True
     MEMORY_SUMMARY_MODEL  = "qwen3:14b"
+    AXIO_MEMORY_BACKEND   = "json"
 
 # ---------------------------------------------------------------------------
 #  ChromaDB -- optional dependency
@@ -144,6 +146,11 @@ class MemoryManager:
         MEMORY_DIR.mkdir(parents=True, exist_ok=True)
         CHROMA_DIR.mkdir(parents=True, exist_ok=True)
         self._facts_path = MEMORY_DIR / f"{mode}_memory.json"
+        self.backend_name = AXIO_MEMORY_BACKEND
+        self._postgres_backend = None
+        if self.backend_name == "postgres":
+            from core.memory_backends.postgres_backend import PostgresMemoryBackend
+            self._postgres_backend = PostgresMemoryBackend(self.mode)
         self._chroma     = self._init_chroma()
 
     # -----------------------------------------------------------------------
@@ -171,6 +178,10 @@ class MemoryManager:
     # -----------------------------------------------------------------------
 
     def get_facts(self) -> dict:
+        if self._postgres_backend:
+            base = dict(_DEFAULT_FACTS.get(self.mode, {}))
+            base.update(self._postgres_backend.get_facts())
+            return base
         if self._facts_path.exists():
             try:
                 with open(self._facts_path, encoding="utf-8") as f:
@@ -183,6 +194,22 @@ class MemoryManager:
         return dict(_DEFAULT_FACTS.get(self.mode, {}))
 
     def update_facts(self, patch: dict):
+        if self._postgres_backend:
+            facts = self.get_facts()
+            for key, value in patch.items():
+                if isinstance(value, list) and isinstance(facts.get(key), list):
+                    existing = facts[key]
+                    for item in value:
+                        if item not in existing:
+                            existing.append(item)
+                    facts[key] = existing
+                elif isinstance(value, dict) and isinstance(facts.get(key), dict):
+                    facts[key].update(value)
+                else:
+                    facts[key] = value
+            facts["last_session"] = datetime.now().isoformat()
+            self._postgres_backend.update_facts(facts)
+            return
         facts = self.get_facts()
         for key, value in patch.items():
             if isinstance(value, list) and isinstance(facts.get(key), list):
@@ -276,6 +303,15 @@ class MemoryManager:
         return None
 
     def store_chunk(self, text: str, metadata: dict = None):
+        if self._postgres_backend:
+            meta = {"mode": self.mode, "ts": datetime.now().isoformat()}
+            if metadata:
+                meta.update({k: str(v) for k, v in metadata.items()})
+            embedding = self._embed_via_ollama(text)
+            if not embedding:
+                return
+            self._postgres_backend.store_chunk(text, embedding, meta)
+            return
         if not self._chroma:
             return
         chunk_id  = str(uuid.uuid4())
@@ -298,6 +334,11 @@ class MemoryManager:
 
     def recall(self, query: str, n_results: int = None):
         n = n_results or MEMORY_RECALL_RESULTS
+        if self._postgres_backend:
+            embedding = self._embed_via_ollama(query)
+            if embedding:
+                return self._postgres_backend.recall(embedding, n)
+            return self._keyword_fallback(query)
         if self._chroma:
             try:
                 embedding = self._embed_via_ollama(query)
@@ -489,6 +530,19 @@ class MemoryManager:
     # -----------------------------------------------------------------------
 
     def stats(self) -> dict:
+        if self._postgres_backend:
+            backend_stats = self._postgres_backend.stats()
+            facts = self.get_facts()
+            return {
+                "mode":         self.mode,
+                "backend":      "postgres",
+                "facts_file":   "postgres",
+                "facts_loaded": bool(facts),
+                "chroma_ok":    False,
+                "chroma_docs":  backend_stats.get("embedding_count", 0),
+                "last_session": facts.get("last_session", "never"),
+                **backend_stats,
+            }
         chroma_count = 0
         chroma_ok    = False
         if self._chroma:
