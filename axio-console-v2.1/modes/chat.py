@@ -23,10 +23,24 @@ from core.models       import OllamaClient, ClaudeClient
 from core.session      import SessionManager
 from core.logger       import AuditLogger
 from core.file_context import SESSION_CONTEXT
+from core.config       import MODELS
 from core.ui           import (
     mode_banner, status_line, divider,
     CYAN, YELLOW, GREEN, RED, PURPLE, DIM, BOLD, RESET, ok, warn, err, hi, lo
 )
+
+
+def _select_default_chat_model(models: list[dict], configured_model: str) -> str:
+    names = [m.get("name", "") for m in models]
+    if configured_model in names:
+        return configured_model
+
+    for name in names:
+        lowered = name.lower()
+        if "embed" not in lowered and "embedding" not in lowered:
+            return name
+
+    return configured_model or "mistral:latest"
 
 
 HELP = f"""
@@ -66,7 +80,7 @@ def run(initial_model: str = "", initial_session: str = None):
 
     # Resolve active model
     models = ollama.list_models()
-    model  = initial_model or (models[0]["name"] if models else "mistral:latest")
+    model  = initial_model or _select_default_chat_model(models, MODELS["chat"])
 
     # Init or resume session
     if initial_session:
