@@ -1,0 +1,22 @@
+services:
+  axio-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: axio-cortex-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${AXIO_DB_NAME:-axio_cortex}
+      POSTGRES_USER: ${AXIO_DB_USER:-axio}
+      POSTGRES_PASSWORD: ${AXIO_DB_PASSWORD:-local-dev-password}
+    ports:
+      - "${AXIO_DB_BIND:-127.0.0.1}:${AXIO_DB_PORT:-5432}:5432"
+    volumes:
+      - axio_postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AXIO_DB_USER:-axio} -d ${AXIO_DB_NAME:-axio_cortex}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  axio_postgres_data:
