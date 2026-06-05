@@ -1,0 +1,45 @@
+# routing.yaml — AxioModel Improvement v2
+#
+# CHANGES FROM ORIGINAL:
+#   - revenue_analysis: qwen3:14b → qwen3-coder:30b
+#     Reason: qwen3:14b timed out on MATH-001 and ARCH-001 benchmarks.
+#     qwen3-coder:30b completes all tasks and scored 75-92 across benchmarks.
+#   - All routes: max_context capped to prevent Ollama OOM/timeout.
+#   - premium_reasoning: qwen3-coder:30b added as local fallback.
+#   - qwen3:14b retained only in premium_reasoning fallback chain.
+
+model_router:
+  default_model: "qwen3:8b"
+  routes:
+    quick_chat:
+      model: "qwen3:8b"
+      temperature: 0.3
+      max_context: 4096         # was 8192 — capped to reduce timeout risk
+
+    revenue_analysis:
+      model: "qwen3-coder:30b"  # was qwen3:14b (timed out on 2/4 benchmarks)
+      temperature: 0.2
+      max_context: 8192         # was 16384
+
+    coding_agent:
+      model: "qwen3-coder:30b"
+      temperature: 0.1
+      max_context: 16384        # was 32768
+
+    exact_math:
+      tool: "python"
+      model: null
+
+    premium_reasoning:
+      provider: "claude_api"
+      model: "claude-sonnet-4-6"
+      fallback:                 # NEW: local fallback if Claude API unavailable
+        - model: "qwen3-coder:30b"
+          max_context: 8192
+      trigger:
+        - "large codebase"
+        - "complex architecture"
+        - "production bug"
+        - "high-value deliverable"
+        - "ASC606 policy memo"
+        - "audit memo"

@@ -1,0 +1,71 @@
+# models.yaml — AxioModel Improvement v2.1
+#
+# BENCHMARK-INFORMED ROLES (ASSESS-006, 2026-05-09):
+#   qwen3:14b      → reasoning_medium  — scored 85/Good on REVREC-001 (revenue primary)
+#   qwen3-coder:30b → coding_agent     — 72 on revenue but coding-specialist; revenue removed
+#   llama3.1:8b    → fallback_fast     — 35/Weak on revenue; last-resort only
+#   qwen3:8b       → fast_general      — 72/Good on revenue; best for chat/summaries
+
+local_models:
+  qwen3_8b:
+    provider: ollama
+    name: qwen3:8b
+    role: fast_general
+    temperature: 0.3
+    top_p: 0.9
+    benchmark_avg: ~77          # coding 92, arch 82, revenue 72 (ASSESS-006)
+    recommended_for:
+      - fast chat
+      - summaries
+      - prompt drafting
+      - simple code
+      - architecture questions
+
+  qwen3_14b:
+    provider: ollama
+    name: qwen3:14b
+    role: reasoning_medium       # restored — confirmed 85/Good on REVREC-001
+    temperature: 0.2
+    top_p: 0.85
+    benchmark_avg: ~85           # revenue 85 (ASSESS-006); primary revenue/reasoning route
+    recommended_for:
+      - revenue recognition analysis
+      - ASC 606 decision trees
+      - structured reasoning
+      - business documentation
+      - premium_reasoning local fallback
+
+  qwen3_coder_30b:
+    provider: ollama
+    name: qwen3-coder:30b
+    role: coding_agent           # coding-only — revenue route removed per ASSESS-006
+    temperature: 0.1
+    top_p: 0.8
+    benchmark_avg: ~72           # coding 92, revenue 72 (not primary use)
+    recommended_for:
+      - Python backend
+      - REST APIs
+      - repo analysis
+      - code refactoring
+      - local Claude-like console
+    not_recommended_for:
+      - revenue analysis         # qwen3:14b handles this (scored 85 vs 72)
+
+  llama31_8b:
+    provider: ollama
+    name: llama3.1:8b
+    role: fallback_fast
+    temperature: 0.3
+    top_p: 0.9
+    benchmark_avg: ~35           # coding 72, arch 45, math 15, revenue 35 (ASSESS-006)
+    caution: "Weakest benchmark performer. Use only as last-resort fallback."
+
+external_models:
+  claude_api:
+    provider: anthropic
+    role: premium_reasoning
+    use_only_when:
+      - complex production architecture
+      - client deliverable
+      - deep codebase reasoning
+      - high-risk financial logic

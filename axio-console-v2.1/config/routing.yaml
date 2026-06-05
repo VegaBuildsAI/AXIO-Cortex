@@ -1,0 +1,43 @@
+# routing.yaml — AxioModel Improvement v2.1
+#
+# BENCHMARK-INFORMED ROUTING (ASSESS-006, 2026-05-09):
+#   revenue_analysis : qwen3:14b scored 85/Good  → primary revenue route
+#   coding_agent     : qwen3-coder:30b scored 92/coding → coding-only route
+#   qwen3-coder:30b  : REMOVED from revenue — coding specialist only
+#   All routes       : max_context capped to prevent Ollama OOM/timeout
+
+model_router:
+  default_model: "qwen3:8b"
+  routes:
+    quick_chat:
+      model: "qwen3:8b"
+      temperature: 0.3
+      max_context: 4096         # capped from 8192
+
+    revenue_analysis:
+      model: "qwen3:14b"        # restored — scored 85/Good on REVREC-001
+      temperature: 0.2
+      max_context: 8192         # capped from 16384
+
+    coding_agent:
+      model: "qwen3-coder:30b"  # coding-only; removed from revenue route
+      temperature: 0.1
+      max_context: 16384        # capped from 32768
+
+    exact_math:
+      tool: "python"
+      model: null
+
+    premium_reasoning:
+      provider: "claude_api"
+      model: "claude-sonnet-4-6"
+      fallback:                 # local fallback if Claude API unavailable
+        - model: "qwen3:14b"    # better reasoning fallback than coder model
+          max_context: 8192
+      trigger:
+        - "large codebase"
+        - "complex architecture"
+        - "production bug"
+        - "high-value deliverable"
+        - "ASC606 policy memo"
+        - "audit memo"

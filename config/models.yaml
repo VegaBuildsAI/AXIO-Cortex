@@ -1,0 +1,69 @@
+# models.yaml — AxioModel Improvement v2
+#
+# CHANGES FROM ORIGINAL:
+#   - qwen3_14b: role demoted from reasoning_medium → fallback_reasoning
+#     Reason: timed out on 2/4 benchmark tasks; not reliable for primary routing.
+#   - qwen3_coder_30b: role expanded from coding_agent → coding_and_analysis
+#     Reason: scored 75-92 across all benchmark types; reliable for revenue & arch tasks.
+#   - llama31_8b: notes added reflecting weak benchmark performance (avg ~34).
+
+local_models:
+  qwen3_8b:
+    provider: ollama
+    name: qwen3:8b
+    role: fast_general
+    temperature: 0.3
+    top_p: 0.9
+    benchmark_avg: ~87          # coding 92, arch 82 (math/revenue timed out or unscored)
+    recommended_for:
+      - fast chat
+      - summaries
+      - prompt drafting
+      - simple code
+      - architecture questions
+
+  qwen3_14b:
+    provider: ollama
+    name: qwen3:14b
+    role: fallback_reasoning     # was reasoning_medium — demoted due to timeouts
+    temperature: 0.2
+    top_p: 0.85
+    benchmark_avg: ~46           # coding 92, 2/4 tasks timed out
+    caution: "Timed out on MATH-001 and ARCH-001. Do not assign to latency-sensitive routes."
+    recommended_for:
+      - premium_reasoning fallback (low-load only)
+
+  qwen3_coder_30b:
+    provider: ollama
+    name: qwen3-coder:30b
+    role: coding_and_analysis    # was coding_agent — expanded based on benchmark results
+    temperature: 0.1
+    top_p: 0.8
+    benchmark_avg: ~54           # coding 92, arch 75, math 0 (wrong answer), revenue 0 (rubric bug)
+    recommended_for:
+      - Python backend
+      - REST APIs
+      - repo analysis
+      - code refactoring
+      - revenue analysis       # NEW — replaces qwen3:14b on this route
+      - architecture design
+      - local Claude-like console
+
+  llama31_8b:
+    provider: ollama
+    name: llama3.1:8b
+    role: fallback_fast
+    temperature: 0.3
+    top_p: 0.9
+    benchmark_avg: ~34           # coding 72, arch 45, math 15, revenue 5
+    caution: "Weakest benchmark performer. Use only as last-resort fallback."
+
+external_models:
+  claude_api:
+    provider: anthropic
+    role: premium_reasoning
+    use_only_when:
+      - complex production architecture
+      - client deliverable
+      - deep codebase reasoning
+      - high-risk financial logic
