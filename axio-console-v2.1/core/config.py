@@ -70,6 +70,17 @@ MEMORY_SUMMARY_MODEL  = os.getenv("MEMORY_SUMMARY_MODEL", "qwen3:14b")
 MEMORY_EMBED_MODEL    = os.getenv("MEMORY_EMBED_MODEL",   "nomic-embed-text:latest")
 
 # ---------------------------------------------------------
+#  LIVE DATABASE BACKEND
+# ---------------------------------------------------------
+AXIO_MEMORY_BACKEND = os.getenv("AXIO_MEMORY_BACKEND", "json").strip().lower() or "json"
+
+AXIO_DB_HOST     = os.getenv("AXIO_DB_HOST", "127.0.0.1")
+AXIO_DB_PORT     = int(os.getenv("AXIO_DB_PORT", "5432"))
+AXIO_DB_NAME     = os.getenv("AXIO_DB_NAME", "axio_cortex")
+AXIO_DB_USER     = os.getenv("AXIO_DB_USER", "axio")
+AXIO_DB_PASSWORD = os.getenv("AXIO_DB_PASSWORD", "local-dev-password")
+
+# ---------------------------------------------------------
 #  SMART ROUTING -- keyword -> route
 #  Premium is checked FIRST so it wins over revenue for PDF/legal/audit tasks.
 #  The router also runs an arithmetic-expression regex for math detection.
