@@ -116,6 +116,41 @@ py axio.py benchmark
 
 ---
 
+## Docker Live Database
+
+AXIO Cortex can use a local Docker Postgres + pgvector database as its live
+memory backend.
+
+Start the database from the repository root:
+
+```powershell
+docker compose up -d axio-postgres
+```
+
+Enable the backend in `axio-console-v2.1/.env`:
+
+```env
+AXIO_MEMORY_BACKEND=postgres
+AXIO_DB_HOST=127.0.0.1
+AXIO_DB_PORT=5432
+AXIO_DB_NAME=axio_cortex
+AXIO_DB_USER=axio
+AXIO_DB_PASSWORD=local-dev-password
+```
+
+Import existing local facts:
+
+```powershell
+cd axio-console-v2.1
+py scripts/migrate_memory_to_postgres.py
+```
+
+The default Docker binding is localhost-only through `AXIO_DB_BIND=127.0.0.1`.
+To enable future LAN access, change `AXIO_DB_BIND` intentionally and restrict
+access with Windows Firewall.
+
+---
+
 ## GUIDE BY NEED
 
 | What you need | Use this mode |
