@@ -24,6 +24,7 @@ from core.session      import SessionManager
 from core.logger       import AuditLogger
 from core.file_context import SESSION_CONTEXT
 from core.config       import MODELS
+from core.memory       import MemoryManager, _handle_memory_cmd
 from core.ui           import (
     mode_banner, status_line, divider,
     CYAN, YELLOW, GREEN, RED, PURPLE, DIM, BOLD, RESET, ok, warn, err, hi, lo
@@ -41,6 +42,12 @@ def _select_default_chat_model(models: list[dict], configured_model: str) -> str
             return name
 
     return configured_model or "mistral:latest"
+
+
+def _save_and_store_memory(sm: SessionManager, mem: MemoryManager, session: dict, ollama):
+    sm.save(session)
+    if session.get("messages"):
+        mem.store_session(session, ollama_client=ollama)
 
 
 HELP = f"""
@@ -67,6 +74,7 @@ def run(initial_model: str = "", initial_session: str = None):
     ollama = OllamaClient()
     sm     = SessionManager()
     logger = AuditLogger("chat")
+    mem    = MemoryManager("chat")
 
     # Try to init Claude (optional)
     try:
@@ -99,7 +107,7 @@ def run(initial_model: str = "", initial_session: str = None):
 
             prompt = input(f"  {CYAN}CHAT›{RESET} ").strip()
         except (KeyboardInterrupt, EOFError):
-            sm.save(session)
+            _save_and_store_memory(sm, mem, session, ollama)
             print(f"\n  {ok('Session saved.')} Goodbye.\n")
             break
 
@@ -113,7 +121,7 @@ def run(initial_model: str = "", initial_session: str = None):
             arg   = parts[1] if len(parts) > 1 else ""
 
             if cmd in ("/exit", "/quit"):
-                sm.save(session)
+                _save_and_store_memory(sm, mem, session, ollama)
                 print(f"  {ok('Session saved.')} Goodbye.\n")
                 break
 
@@ -150,7 +158,7 @@ def run(initial_model: str = "", initial_session: str = None):
                     print(f"  Backend → {ok('Ollama')}\n")
 
             elif cmd == "/new":
-                sm.save(session)
+                _save_and_store_memory(sm, mem, session, ollama)
                 session = sm.new(arg or None, session.get("model", model), "chat")
                 sname = session["name"]
                 print(f"  {ok(f'New session: {sname}')}\n")
@@ -172,7 +180,7 @@ def run(initial_model: str = "", initial_session: str = None):
                 if arg:
                     loaded = sm.load(arg)
                     if loaded:
-                        sm.save(session)
+                        _save_and_store_memory(sm, mem, session, ollama)
                         session = loaded
                         sname   = session["name"]
                         print(f"  {ok(f'Loaded: {sname}')}\n")
@@ -182,7 +190,7 @@ def run(initial_model: str = "", initial_session: str = None):
                     print(f"  {warn('Usage: /load <name>')}\n")
 
             elif cmd == "/save":
-                sm.save(session)
+                _save_and_store_memory(sm, mem, session, ollama)
                 sname = session["name"]
                 print(f"  {ok(f'Saved: {sname}')}\n")
 
@@ -214,6 +222,9 @@ def run(initial_model: str = "", initial_session: str = None):
 """)
 
             # ── shared file context ───────────────────────────────
+            elif cmd == "/memory":
+                _handle_memory_cmd(("memory " + arg).strip(), mem)
+
             elif cmd == "/browse":
                 print(SESSION_CONTEXT.load_browse_folder())
 
@@ -241,6 +252,9 @@ def run(initial_model: str = "", initial_session: str = None):
             cur_model   = session.get("model", model)
             # inject shared file context if files are loaded
             chat_prompt = SESSION_CONTEXT.inject(prompt, mode="block") if SESSION_CONTEXT.count else prompt
+            memory_prefix = mem.build_memory_prefix(prompt)
+            if memory_prefix:
+                chat_prompt = memory_prefix + "\n\n" + chat_prompt
             messages    = session["messages"] + [{"role": "user", "content": chat_prompt}]
 
             divider()
@@ -267,5 +281,6 @@ def run(initial_model: str = "", initial_session: str = None):
             print()
 
             sm.add_turn(session, prompt, response)
+            mem.auto_update_facts(prompt, response)
             sm.save(session)
             logger.log_turn(prompt, response, cur_model, route=cur_backend)
