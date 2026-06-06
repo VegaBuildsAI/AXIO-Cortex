@@ -71,22 +71,32 @@ class PostgresMemoryBackend:
             )
             conn.commit()
 
-    def recall(self, embedding: list[float], n_results: int):
+    def recall(self, embedding: list[float], n_results: int, modes: list[str] = None):
         if len(embedding) != 768:
             raise ValueError(
                 f"Expected embedding dimension 768, got {len(embedding)}"
             )
-        with self._connection() as conn:
-            rows = conn.execute(
+        if modes:
+            sql = """
+                SELECT content, metadata, embedding <=> %s::vector AS distance
+                FROM memory_embeddings
+                WHERE mode = ANY(%s)
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
                 """
+            params = (embedding, modes, embedding, n_results)
+        else:
+            sql = """
                 SELECT content, metadata, embedding <=> %s::vector AS distance
                 FROM memory_embeddings
                 WHERE mode = %s
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
-                """,
-                (embedding, self.mode, embedding, n_results),
-            ).fetchall()
+                """
+            params = (embedding, self.mode, embedding, n_results)
+
+        with self._connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
         return [
             {"text": row["content"], "metadata": row["metadata"], "distance": row["distance"]}
             for row in rows

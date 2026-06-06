@@ -332,12 +332,12 @@ class MemoryManager:
         except Exception:
             pass
 
-    def recall(self, query: str, n_results: int = None):
+    def recall(self, query: str, n_results: int = None, allowed_modes: list[str] = None):
         n = n_results or MEMORY_RECALL_RESULTS
         if self._postgres_backend:
             embedding = self._embed_via_ollama(query)
             if embedding:
-                return self._postgres_backend.recall(embedding, n)
+                return self._postgres_backend.recall(embedding, n, modes=allowed_modes)
             return self._keyword_fallback(query)
         if self._chroma:
             try:
@@ -477,7 +477,7 @@ class MemoryManager:
     #  Memory prefix builder
     # -----------------------------------------------------------------------
 
-    def build_memory_prefix(self, query: str = "") -> str:
+    def build_memory_prefix(self, query: str = "", allowed_modes: list[str] = None) -> str:
         parts = []
         facts = self.get_facts()
         fact_lines = []
@@ -506,7 +506,11 @@ class MemoryManager:
             parts.append("=== LONG-TERM MEMORY ===\n" + "\n".join(fact_lines))
 
         if query:
-            recalls = self.recall(query, n_results=MEMORY_RECALL_RESULTS)
+            recalls = self.recall(
+                query,
+                n_results=MEMORY_RECALL_RESULTS,
+                allowed_modes=allowed_modes,
+            )
             if recalls:
                 recall_texts = [r["text"] for r in recalls if r.get("text")]
                 if recall_texts:

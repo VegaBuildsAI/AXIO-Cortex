@@ -84,6 +84,35 @@ class PostgresMemoryBackendUnitTests(unittest.TestCase):
         executed_sql = "\n".join(call[0] for call in conn.cursor_obj.calls)
         self.assertIn("embedding <=>", executed_sql)
 
+    def test_recall_without_modes_filters_to_backend_mode(self):
+        conn = FakeConnection()
+        backend = PostgresMemoryBackend("chat", connection_factory=lambda: conn)
+        conn.cursor_obj.rows = []
+
+        backend.recall([0.0] * 768, n_results=2)
+
+        sql, params = conn.cursor_obj.calls[-1]
+        self.assertIn("WHERE mode = %s", sql)
+        self.assertEqual(params[1], "chat")
+
+    def test_recall_with_allowed_modes_filters_to_those_modes(self):
+        conn = FakeConnection()
+        backend = PostgresMemoryBackend("code", connection_factory=lambda: conn)
+        conn.cursor_obj.rows = [
+            {"content": "Cowork remembered AXIO", "metadata": {"mode": "cowork"}, "distance": 0.1}
+        ]
+
+        rows = backend.recall(
+            [0.0] * 768,
+            n_results=3,
+            modes=["code", "cowork", "chat", "console"],
+        )
+
+        sql, params = conn.cursor_obj.calls[-1]
+        self.assertIn("WHERE mode = ANY(%s)", sql)
+        self.assertEqual(params[1], ["code", "cowork", "chat", "console"])
+        self.assertEqual(rows[0]["metadata"]["mode"], "cowork")
+
 
 if __name__ == "__main__":
     unittest.main()
