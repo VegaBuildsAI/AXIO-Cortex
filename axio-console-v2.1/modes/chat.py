@@ -25,7 +25,6 @@ from core.session      import SessionManager
 from core.logger       import AuditLogger
 from core.file_context import SESSION_CONTEXT
 from core.config       import MODELS
-from core.memory       import MemoryManager, _handle_memory_cmd
 from core.mode_memory  import ModeMemorySession
 from core.ui           import (
     mode_banner, status_line, divider,
@@ -44,12 +43,6 @@ def _select_default_chat_model(models: list[dict], configured_model: str) -> str
             return name
 
     return configured_model or "mistral:latest"
-
-
-def _save_and_store_memory(sm: SessionManager, mem: MemoryManager, session: dict, ollama):
-    sm.save(session)
-    if session.get("messages"):
-        mem.store_session(session, ollama_client=ollama)
 
 
 def _store_chat_memory(sm: SessionManager, memory_session: ModeMemorySession, session: dict, ollama):
@@ -95,7 +88,6 @@ def run(initial_model: str = "", initial_session: str = None):
     ollama = OllamaClient()
     sm     = SessionManager()
     logger = AuditLogger("chat")
-    mem    = MemoryManager("chat")
     memory = ModeMemorySession("chat")
 
     # Try to init Claude (optional)
