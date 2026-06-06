@@ -41,8 +41,26 @@ def _load_psycopg():
         ) from exc
 
 
+def _register_vector(conn):
+    """Register the pgvector type adapters on this connection.
+
+    Without this, psycopg adapts a Python list to a Postgres array literal
+    ('{...}'), which cannot be stored in or compared against a `vector`
+    column -- every embedding store/recall would fail at runtime.
+    """
+    try:
+        from pgvector.psycopg import register_vector
+    except ImportError as exc:
+        raise DatabaseDependencyError(
+            "Postgres backend requires pgvector. Install with: "
+            "py -m pip install pgvector"
+        ) from exc
+    register_vector(conn)
+
+
 @contextmanager
 def connect():
     psycopg, dict_row = _load_psycopg()
     with psycopg.connect(get_database_dsn(), row_factory=dict_row) as conn:
+        _register_vector(conn)
         yield conn

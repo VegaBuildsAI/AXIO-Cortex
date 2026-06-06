@@ -69,6 +69,22 @@ except ImportError:
 VALID_MODES = ("chat", "code", "cowork", "revrec", "console")
 
 # ---------------------------------------------------------------------------
+#  Postgres graceful-fallback warning (printed at most once per process)
+# ---------------------------------------------------------------------------
+_PG_FALLBACK_WARNED = False
+
+
+def _warn_pg_fallback(exc: Exception):
+    """Warn once that the Postgres backend failed and JSON memory is used."""
+    global _PG_FALLBACK_WARNED
+    if not _PG_FALLBACK_WARNED:
+        _PG_FALLBACK_WARNED = True
+        print(
+            f"  [AXIO memory] Postgres backend unavailable ({exc}); "
+            f"falling back to local JSON/keyword memory."
+        )
+
+# ---------------------------------------------------------------------------
 #  Default structured-fact schema per mode
 # ---------------------------------------------------------------------------
 _DEFAULT_FACTS = {
@@ -149,8 +165,12 @@ class MemoryManager:
         self.backend_name = AXIO_MEMORY_BACKEND
         self._postgres_backend = None
         if self.backend_name == "postgres":
-            from core.memory_backends.postgres_backend import PostgresMemoryBackend
-            self._postgres_backend = PostgresMemoryBackend(self.mode)
+            try:
+                from core.memory_backends.postgres_backend import PostgresMemoryBackend
+                self._postgres_backend = PostgresMemoryBackend(self.mode)
+            except Exception as exc:
+                _warn_pg_fallback(exc)
+                self._postgres_backend = None
         self._chroma     = self._init_chroma()
 
     # -----------------------------------------------------------------------
@@ -179,9 +199,12 @@ class MemoryManager:
 
     def get_facts(self) -> dict:
         if self._postgres_backend:
-            base = dict(_DEFAULT_FACTS.get(self.mode, {}))
-            base.update(self._postgres_backend.get_facts())
-            return base
+            try:
+                base = dict(_DEFAULT_FACTS.get(self.mode, {}))
+                base.update(self._postgres_backend.get_facts())
+                return base
+            except Exception as exc:
+                _warn_pg_fallback(exc)
         if self._facts_path.exists():
             try:
                 with open(self._facts_path, encoding="utf-8") as f:
@@ -195,21 +218,24 @@ class MemoryManager:
 
     def update_facts(self, patch: dict):
         if self._postgres_backend:
-            facts = self.get_facts()
-            for key, value in patch.items():
-                if isinstance(value, list) and isinstance(facts.get(key), list):
-                    existing = facts[key]
-                    for item in value:
-                        if item not in existing:
-                            existing.append(item)
-                    facts[key] = existing
-                elif isinstance(value, dict) and isinstance(facts.get(key), dict):
-                    facts[key].update(value)
-                else:
-                    facts[key] = value
-            facts["last_session"] = datetime.now().isoformat()
-            self._postgres_backend.update_facts(facts)
-            return
+            try:
+                facts = self.get_facts()
+                for key, value in patch.items():
+                    if isinstance(value, list) and isinstance(facts.get(key), list):
+                        existing = facts[key]
+                        for item in value:
+                            if item not in existing:
+                                existing.append(item)
+                        facts[key] = existing
+                    elif isinstance(value, dict) and isinstance(facts.get(key), dict):
+                        facts[key].update(value)
+                    else:
+                        facts[key] = value
+                facts["last_session"] = datetime.now().isoformat()
+                self._postgres_backend.update_facts(facts)
+                return
+            except Exception as exc:
+                _warn_pg_fallback(exc)
         facts = self.get_facts()
         for key, value in patch.items():
             if isinstance(value, list) and isinstance(facts.get(key), list):
@@ -304,13 +330,16 @@ class MemoryManager:
 
     def store_chunk(self, text: str, metadata: dict = None):
         if self._postgres_backend:
-            meta = {"mode": self.mode, "ts": datetime.now().isoformat()}
-            if metadata:
-                meta.update({k: str(v) for k, v in metadata.items()})
-            embedding = self._embed_via_ollama(text)
-            if not embedding:
-                return
-            self._postgres_backend.store_chunk(text, embedding, meta)
+            try:
+                meta = {"mode": self.mode, "ts": datetime.now().isoformat()}
+                if metadata:
+                    meta.update({k: str(v) for k, v in metadata.items()})
+                embedding = self._embed_via_ollama(text)
+                if not embedding:
+                    return
+                self._postgres_backend.store_chunk(text, embedding, meta)
+            except Exception as exc:
+                _warn_pg_fallback(exc)
             return
         if not self._chroma:
             return
@@ -335,9 +364,12 @@ class MemoryManager:
     def recall(self, query: str, n_results: int = None, allowed_modes: list[str] = None):
         n = n_results or MEMORY_RECALL_RESULTS
         if self._postgres_backend:
-            embedding = self._embed_via_ollama(query)
-            if embedding:
-                return self._postgres_backend.recall(embedding, n, modes=allowed_modes)
+            try:
+                embedding = self._embed_via_ollama(query)
+                if embedding:
+                    return self._postgres_backend.recall(embedding, n, modes=allowed_modes)
+            except Exception as exc:
+                _warn_pg_fallback(exc)
             return self._keyword_fallback(query)
         if self._chroma:
             try:
@@ -535,18 +567,21 @@ class MemoryManager:
 
     def stats(self) -> dict:
         if self._postgres_backend:
-            backend_stats = self._postgres_backend.stats()
-            facts = self.get_facts()
-            return {
-                "mode":         self.mode,
-                "backend":      "postgres",
-                "facts_file":   "postgres",
-                "facts_loaded": bool(facts),
-                "chroma_ok":    False,
-                "chroma_docs":  backend_stats.get("embedding_count", 0),
-                "last_session": facts.get("last_session", "never"),
-                **backend_stats,
-            }
+            try:
+                backend_stats = self._postgres_backend.stats()
+                facts = self.get_facts()
+                return {
+                    "mode":         self.mode,
+                    "backend":      "postgres",
+                    "facts_file":   "postgres",
+                    "facts_loaded": bool(facts),
+                    "chroma_ok":    False,
+                    "chroma_docs":  backend_stats.get("embedding_count", 0),
+                    "last_session": facts.get("last_session", "never"),
+                    **backend_stats,
+                }
+            except Exception as exc:
+                _warn_pg_fallback(exc)
         chroma_count = 0
         chroma_ok    = False
         if self._chroma:
