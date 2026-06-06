@@ -25,6 +25,7 @@ from core.ui      import (
 )
 from core.config       import MODELS, CLAUDE_MODEL, MAX_ITERS, MAX_FILE_BYTES, TIMEOUT
 from core.file_context import SESSION_CONTEXT
+from core.mode_memory  import ModeMemorySession
 
 
 # ─────────────────────────────────────────────────────────
@@ -345,6 +346,18 @@ You have tools to read/write/edit files, search code, manage directories, and ru
 #  AGENT LOOP — Ollama
 # ─────────────────────────────────────────────────────────
 
+def build_code_task(task: str, file_context: str = "", memory_prefix: str = "") -> str:
+    parts = []
+    if memory_prefix:
+        parts.append(memory_prefix.strip())
+    if file_context:
+        parts.append(file_context.strip())
+    if parts:
+        parts.append(task)
+        return "\n\n".join(parts)
+    return task
+
+
 def _run_ollama_agent(task: str, model: str, ollama: OllamaClient, logger: AuditLogger):
     import time
     messages = [
@@ -362,7 +375,7 @@ def _run_ollama_agent(task: str, model: str, ollama: OllamaClient, logger: Audit
         except Exception as e:
             spinner.stop()
             print(f"  {err(f'Error: {e}')}")
-            return
+            return f"Error: {e}"
 
         msg        = data.get("message", {})
         tool_calls = msg.get("tool_calls", [])
@@ -372,7 +385,7 @@ def _run_ollama_agent(task: str, model: str, ollama: OllamaClient, logger: Audit
             elapsed = round(time.time() - start, 1)
             print(f"\n  {CYAN}[{model}]{RESET} {content}")
             print(f"\n  {lo(f'Done in {iteration+1} step(s), {elapsed}s')}\n")
-            return
+            return content
 
         messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
 
@@ -395,7 +408,9 @@ def _run_ollama_agent(task: str, model: str, ollama: OllamaClient, logger: Audit
 
             messages.append({"role": "tool", "content": result})
 
-    print(f"  {warn(f'Agent stopped: reached max {MAX_ITERS} steps')}")
+    message = f"Agent stopped: reached max {MAX_ITERS} steps"
+    print(f"  {warn(message)}")
+    return message
 
 
 # ─────────────────────────────────────────────────────────
@@ -416,11 +431,11 @@ def _run_claude_agent(task: str, claude: ClaudeClient, logger: AuditLogger):
         except Exception as e:
             spinner.stop()
             print(f"  {err(f'Claude error: {e}')}")
-            return
+            return f"Claude error: {e}"
 
         if resp is None:
             spinner.stop()
-            return
+            return "Claude returned no response"
 
         text_parts = [b.text for b in resp.content if b.type == "text"]
         tool_uses  = [b      for b in resp.content if b.type == "tool_use"]
@@ -432,7 +447,7 @@ def _run_claude_agent(task: str, claude: ClaudeClient, logger: AuditLogger):
             final_text = "\n".join(text_parts).strip()
             print(f"\n  {CYAN}[Claude]{RESET} {final_text}")
             print(f"\n  {lo(f'Done in {iteration+1} step(s), {elapsed}s')}\n")
-            return
+            return final_text
 
         tool_results = []
         for tu in tool_uses:
@@ -452,7 +467,9 @@ def _run_claude_agent(task: str, claude: ClaudeClient, logger: AuditLogger):
 
         messages.append({"role": "user", "content": tool_results})
 
-    print(f"  {warn(f'Stopped at max {MAX_ITERS} steps')}")
+    message = f"Stopped at max {MAX_ITERS} steps"
+    print(f"  {warn(message)}")
+    return message
 
 
 # ─────────────────────────────────────────────────────────
@@ -491,6 +508,7 @@ def run(force_claude_session: bool = False):
 
     ollama     = OllamaClient()
     logger     = AuditLogger("code")
+    memory     = ModeMemorySession("code")
     model      = MODELS["coding"]
 
     # Persistent Claude mode: CLI flag OR env var
@@ -523,6 +541,7 @@ def run(force_claude_session: bool = False):
         try:
             task = input(f"  {YELLOW}CODE›{RESET}{claude_label} {ctx_label}").strip()
         except (KeyboardInterrupt, EOFError):
+            memory.store(ollama_client=ollama)
             print(f"\n  {ok('Goodbye.')}\n")
             break
 
@@ -531,7 +550,11 @@ def run(force_claude_session: bool = False):
 
         lower = task.lower()
 
+        if memory.handle_command(task):
+            continue
+
         if lower == "exit":
+            memory.store(ollama_client=ollama)
             print(f"  {ok('Goodbye.')}\n")
             break
 
@@ -579,16 +602,30 @@ def run(force_claude_session: bool = False):
         # ── agent task ────────────────────────────────────────────
         else:
             # inject session file context into the task prompt
-            final_task = SESSION_CONTEXT.inject(task, mode="list") if SESSION_CONTEXT.count else task
+            file_context = SESSION_CONTEXT.inject("", mode="list").strip() if SESSION_CONTEXT.count else ""
+            memory_prefix = memory.prefix(task)
+            final_task = build_code_task(task, file_context, memory_prefix)
             use_claude = force_claude or (claude_ok and ModelRouter.needs_claude(final_task))
             if not _session_claude:
                 force_claude = False
 
+            result_text = ""
             if use_claude and claude_ok:
                 print(f"  {lo('-> routing: Claude API (complex task)')}")
-                _run_claude_agent(final_task, claude, logger)
+                result_text = _run_claude_agent(final_task, claude, logger)
             else:
                 if not ollama.is_running():
                     print(f"  {err('Ollama offline. Run: ollama serve')}\n")
                     continue
-                _run_ollama_agent(final_task, model, ollama, logger)
+                result_text = _run_ollama_agent(final_task, model, ollama, logger)
+
+            if result_text:
+                memory.record_turn(
+                    task,
+                    result_text,
+                    model=CLAUDE_MODEL if use_claude and claude_ok else model,
+                    metadata={
+                        "backend": "claude" if use_claude and claude_ok else "ollama",
+                        "file_context_count": str(SESSION_CONTEXT.count),
+                    },
+                )
