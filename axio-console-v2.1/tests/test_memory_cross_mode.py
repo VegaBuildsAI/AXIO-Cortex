@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from core.memory import MemoryManager
+from core.mode_memory import shared_recall_modes
 
 
 class FakePostgresBackend:
@@ -34,6 +35,11 @@ class MemoryCrossModeTests(unittest.TestCase):
             backend.recall_calls[0][2],
             ["code", "cowork", "chat", "console"],
         )
+
+    def test_revrec_is_not_in_default_shared_recall_modes(self):
+        for mode in ("chat", "cowork", "code"):
+            self.assertNotIn("revrec", shared_recall_modes(mode))
+        self.assertEqual(shared_recall_modes("revrec"), ["revrec"])
 
 
 if __name__ == "__main__":
