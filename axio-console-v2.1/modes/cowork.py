@@ -29,6 +29,7 @@ from core.ui      import (
 )
 from core.config       import TEXT_EXTENSIONS, MAX_FILE_CHARS, MODELS, CLAUDE_MODEL
 from core.file_context import SESSION_CONTEXT
+from core.mode_memory  import ModeMemorySession
 
 
 # ─────────────────────────────────────────────────────────
@@ -165,12 +166,25 @@ HELP = f"""
 #  MAIN
 # ─────────────────────────────────────────────────────────
 
+def build_cowork_prompt(user_prompt: str, workspace_context: str = "", memory_prefix: str = "") -> str:
+    parts = []
+    if memory_prefix:
+        parts.append(memory_prefix.strip())
+    if workspace_context:
+        parts.append(workspace_context.strip())
+    if parts:
+        parts.append(f"User: {user_prompt}")
+        return "\n\n".join(parts)
+    return user_prompt
+
+
 def run():
     """Entry point called by axio.py."""
     mode_banner("cowork", "File-aware workspace assistant  |  Smart model routing")
 
     ollama = OllamaClient()
     logger = AuditLogger("cowork")
+    memory = ModeMemorySession("cowork")
     ws     = WorkspaceState()
 
     # Claude (optional)
@@ -194,6 +208,7 @@ def run():
         try:
             prompt = input(f"  {GREEN}COWORK›{RESET} {ws_label}{loaded_label}").strip()
         except (KeyboardInterrupt, EOFError):
+            memory.store(ollama_client=ollama)
             print(f"\n  {ok('Goodbye.')}\n")
             break
 
@@ -202,8 +217,12 @@ def run():
 
         lower = prompt.lower()
 
+        if memory.handle_command(prompt):
+            continue
+
         # ── commands ──────────────────────────────────────────────
         if lower == "exit":
+            memory.store(ollama_client=ollama)
             print(f"  {ok('Goodbye.')}\n")
             break
 
@@ -227,6 +246,8 @@ def run():
 
         elif lower.startswith("workspace "):
             print(f"  {ws.set(prompt[10:])}\n")
+            if ws.root:
+                memory.memory.update_facts({"workspace_paths": [str(ws.root)]})
             print(ws.list_files())
 
         elif lower == "ls":
@@ -285,8 +306,10 @@ def run():
         # ── model call ───────────────────────────────────────────
         else:
             route, picked = ModelRouter.detect(prompt)
-            context       = ws.context_block()
-            full_prompt   = f"{context}\n\nUser: {prompt}" if context else prompt
+            context = ws.context_block()
+            memory_query = f"{prompt}\nWorkspace: {ws.root}" if ws.root else prompt
+            memory_prefix = memory.prefix(memory_query)
+            full_prompt = build_cowork_prompt(prompt, context, memory_prefix)
 
             print(f"  {lo(f'→ {route} | {picked}')}")
             divider()
@@ -325,4 +348,14 @@ def run():
                 route=route, elapsed=elapsed,
                 workspace=str(ws.root) if ws.root else None,
                 loaded_files=list(ws.loaded_files.keys()),
+            )
+            memory.record_turn(
+                prompt,
+                result_text,
+                model=picked,
+                metadata={
+                    "route": route,
+                    "workspace": str(ws.root) if ws.root else "",
+                    "loaded_files": ",".join(ws.loaded_files.keys()),
+                },
             )
