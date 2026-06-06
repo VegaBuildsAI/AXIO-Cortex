@@ -498,6 +498,11 @@ class MemoryManager:
                             {"role": "user",    "content": user_msg},
                         ],
                         "stream": False,
+                        # Disable qwen3 "thinking": it consumes the output budget and
+                        # pushes summarization past the timeout (ASSESS-004 regression),
+                        # silently forcing the fallback summary. Harmless for non-thinking
+                        # models.
+                        "think": False,
                         "options": {"temperature": 0.1, "num_predict": 512},
                     },
                     timeout=120,

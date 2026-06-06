@@ -75,6 +75,14 @@ What remained genuinely valuable:
    helper, the dead `mem` variable, and an unused import.
    `modes/chat.py`, `tests/test_chat_memory_persistence.py`, commit `a7b1207`.
 
+8. **qwen3 thinking mode silently broke local session summarization.**
+   *(Found during full-local validation, fixed.)* `_summarize_session` calls
+   `qwen3:14b` with a 120s timeout. With thinking enabled the call takes ~132s
+   and exceeds the timeout, so every local session fell back to the templated
+   "Session '...' Started with..." summary instead of a real LLM summary.
+   Passing `think: false` brings it to ~30s and yields clean summaries (no
+   thinking tokens). `core/memory.py`, commit `<summarizer-fix>`.
+
 ### Architecture
 
 7. **Postgres was not a Tier-1 system of record.** *(Fixed.)* The schema
@@ -94,10 +102,24 @@ What remained genuinely valuable:
 - Cross-mode recall returns ranked results over real pgvector.
 - Store/recall confirmed working both with and without the `pgvector` package.
 
+### Full local path validated (no stubs)
+
+End-to-end with real local models — `nomic-embed-text:latest` for embeddings
+and `qwen3:14b` for summarization — against the live Postgres container:
+
+- Real 768-dim embeddings produced and stored.
+- Real qwen3:14b summaries persisted (after the `think: false` fix above;
+  before it, all summaries silently fell back).
+- Semantic cross-mode recall ranked correctly: an async-Python query matched
+  the chat "asyncio" session (dist 0.23) ahead of the code "Postgres pool"
+  session (0.54), across modes.
+- All 42 unit tests pass; smoke data removed and the DB restored to baseline.
+
 ## Not done (out of scope / deferred)
 
-- **Ollama embeddings not exercised live** — validation used a deterministic
-  stub vector. Needs `ollama pull nomic-embed-text`. Orthogonal to the DB path.
 - **Migration is facts-only** — `scripts/migrate_memory_to_postgres.py` does not
   backfill `sessions`/`messages`/embeddings from legacy JSON.
 - **RevRec full-response capture** — only user tasks are captured (see #4).
+- **Live-mode generation thinking** — the `think: false` fix covers the memory
+  summarizer; the user-facing qwen3 generation calls in chat/code/cowork were
+  not changed (out of audit scope).
