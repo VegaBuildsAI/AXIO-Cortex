@@ -115,11 +115,17 @@ and `qwen3:14b` for summarization — against the live Postgres container:
   session (0.54), across modes.
 - All 42 unit tests pass; smoke data removed and the DB restored to baseline.
 
+9. **qwen3 thinking leaked into live user-facing generation.** *(Fixed.)*
+   Beyond the summarizer (#8), the chat/cowork/code generation calls also ran
+   qwen3 with thinking on, leaking `<think>` tokens and adding latency.
+   `OllamaClient` now detects the thinking capability per model via a cached
+   `/api/show` lookup and sends `think: false` only for thinking-capable models
+   (qwen3:8b, qwen3:14b) across `chat_stream`, `generate_stream`, and
+   `tool_call`. Non-thinking models (mistral, llama3.1, qwen3-coder) are
+   untouched. `core/models.py`, commit `d6068e0`.
+
 ## Not done (out of scope / deferred)
 
 - **Migration is facts-only** — `scripts/migrate_memory_to_postgres.py` does not
   backfill `sessions`/`messages`/embeddings from legacy JSON.
 - **RevRec full-response capture** — only user tasks are captured (see #4).
-- **Live-mode generation thinking** — the `think: false` fix covers the memory
-  summarizer; the user-facing qwen3 generation calls in chat/code/cowork were
-  not changed (out of audit scope).
