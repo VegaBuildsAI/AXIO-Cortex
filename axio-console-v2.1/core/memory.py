@@ -68,6 +68,11 @@ except ImportError:
 # ---------------------------------------------------------------------------
 VALID_MODES = ("chat", "code", "cowork", "revrec", "console")
 
+# Modes that must NOT contribute to the shared console master memory.
+# RevRec is a specialized revenue-recognition domain; its deal context must
+# stay isolated from the cross-mode (chat/cowork/code) knowledge base.
+ISOLATED_MODES = ("revrec",)
+
 # ---------------------------------------------------------------------------
 #  Postgres graceful-fallback warning (printed at most once per process)
 # ---------------------------------------------------------------------------
@@ -532,7 +537,9 @@ class MemoryManager:
             "last_session": session.get("updated", datetime.now().isoformat()),
             "notes":        [summary[:300]],
         })
-        self._update_console_master(session.get("mode", self.mode), summary)
+        session_mode = session.get("mode", self.mode)
+        if session_mode not in ISOLATED_MODES:
+            self._update_console_master(session_mode, summary)
 
     def _update_console_master(self, mode: str, summary: str):
         try:
