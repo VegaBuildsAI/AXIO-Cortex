@@ -153,7 +153,7 @@ class PostgresMemoryBackend:
                         summary,
                         embedding,
                         now,
-                        json.dumps({"session_name": session.get("name", ""), "model": model}),
+                        json.dumps({"mode": mode, "session_name": session.get("name", ""), "model": model}),
                     ),
                 )
             conn.commit()
