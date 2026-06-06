@@ -12,6 +12,7 @@ Commands:
   /new [name]        Start a new session
   /sessions          List all saved sessions
   /load <name>       Load a saved session
+  /loadfile <path>   Load a file or folder into shared context
   /save              Save current session
   /clear             Clear message history
   /delete <name>     Delete a saved session
@@ -78,6 +79,12 @@ HELP = f"""
   {YELLOW}/delete <name>{RESET}     Delete a saved session
   {YELLOW}/info{RESET}              Session info
   {YELLOW}/exit{RESET}              Save and quit
+
+{BOLD}File context:{RESET}
+  {YELLOW}/loadfile <path>{RESET}   Load a file or folder into shared context
+  {YELLOW}/browse{RESET}            Pick a folder to load into context
+  {YELLOW}/loaded{RESET}            Show loaded file context
+  {YELLOW}/unload{RESET}            Clear loaded file context
 """
 
 
@@ -255,11 +262,11 @@ def run(initial_model: str = "", initial_session: str = None):
             elif cmd in ("/browse files", "/browsefiles"):
                 print(SESSION_CONTEXT.load_browse_files())
 
-            elif cmd == "/load":
+            elif cmd == "/loadfile":
                 if arg:
                     print(SESSION_CONTEXT.load_path(arg))
                 else:
-                    print(f"  {warn('Usage: /load <file or folder path>')}\n")
+                    print(f"  {warn('Usage: /loadfile <file or folder path>')}\n")
 
             elif cmd in ("/loaded", "/context", "/files"):
                 print(SESSION_CONTEXT.list_str())
