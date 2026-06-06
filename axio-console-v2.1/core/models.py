@@ -27,6 +27,28 @@ class OllamaClient:
 
     def __init__(self, host=None):
         self.host = (host or OLLAMA_HOST).rstrip("/")
+        self._thinking_cache = {}
+
+    def _supports_thinking(self, model):
+        """True if the model advertises the 'thinking' capability (qwen3 dense).
+
+        Cached per model. Used to send think:false so thinking tokens don't
+        consume the output budget / slow responses (ASSESS-004). Non-thinking
+        models (mistral, llama3.1, qwen3-coder) are left untouched.
+        """
+        if model in self._thinking_cache:
+            return self._thinking_cache[model]
+        supported = False
+        try:
+            r = requests.post(
+                f"{self.host}/api/show", json={"model": model}, timeout=5
+            )
+            if r.ok:
+                supported = "thinking" in (r.json().get("capabilities") or [])
+        except Exception:
+            supported = False
+        self._thinking_cache[model] = supported
+        return supported
 
     def is_running(self):
         try:
@@ -45,11 +67,14 @@ class OllamaClient:
     def chat_stream(self, model, messages, print_output=True):
         """Stream a chat response and optionally print tokens live."""
         full = ""
+        payload = {"model": model, "messages": messages, "stream": True}
+        if self._supports_thinking(model):
+            payload["think"] = False
         for attempt in range(RETRY_ATTEMPTS):
             try:
                 r = requests.post(
                     f"{self.host}/api/chat",
-                    json={"model": model, "messages": messages, "stream": True},
+                    json=payload,
                     stream=True, timeout=TIMEOUT,
                 )
                 r.raise_for_status()
@@ -82,6 +107,8 @@ class OllamaClient:
             "stream":  True,
             "options": options or {"temperature": 0.2, "top_p": 0.85},
         }
+        if self._supports_thinking(model):
+            payload["think"] = False
         start = time.time()
         r = requests.post(OLLAMA_GEN, json=payload, stream=True, timeout=TIMEOUT)
         r.raise_for_status()
@@ -101,12 +128,15 @@ class OllamaClient:
 
     def tool_call(self, model, messages, tools):
         """Send a tool-calling request to Ollama (non-streaming)."""
+        payload = {"model": model, "messages": messages,
+                   "tools": tools, "stream": False}
+        if self._supports_thinking(model):
+            payload["think"] = False
         for attempt in range(RETRY_ATTEMPTS):
             try:
                 r = requests.post(
                     f"{self.host}/api/chat",
-                    json={"model": model, "messages": messages,
-                          "tools": tools, "stream": False},
+                    json=payload,
                     timeout=TIMEOUT,
                 )
                 r.raise_for_status()
