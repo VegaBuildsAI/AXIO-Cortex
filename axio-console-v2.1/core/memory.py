@@ -178,6 +178,7 @@ class MemoryManager:
     # -----------------------------------------------------------------------
 
     def _init_chroma(self):
+        self._chroma_client = None
         if not _CHROMA_OK:
             return None
         try:
@@ -185,6 +186,7 @@ class MemoryManager:
                 path=str(CHROMA_DIR),
                 settings=_ChromaSettings(anonymized_telemetry=False),
             )
+            self._chroma_client = client
             collection = client.get_or_create_collection(
                 name=f"axio_{self.mode}",
                 metadata={"hnsw:space": "cosine"},
@@ -192,6 +194,34 @@ class MemoryManager:
             return collection
         except Exception:
             return None
+
+    def _chroma_collection(self, mode: str):
+        """Return the Chroma collection for any mode (for cross-mode recall)."""
+        if mode == self.mode:
+            return self._chroma
+        if not self._chroma_client:
+            return None
+        try:
+            return self._chroma_client.get_or_create_collection(
+                name=f"axio_{mode}",
+                metadata={"hnsw:space": "cosine"},
+            )
+        except Exception:
+            return None
+
+    def _facts_for_mode(self, mode: str) -> dict:
+        """Load structured facts for any mode without a full MemoryManager."""
+        if mode == self.mode:
+            return self.get_facts()
+        base = dict(_DEFAULT_FACTS.get(mode, {}))
+        path = MEMORY_DIR / f"{mode}_memory.json"
+        if path.exists():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    base.update(json.load(f))
+            except Exception:
+                pass
+        return base
 
     # -----------------------------------------------------------------------
     #  Structured facts (Tier 3)
@@ -370,49 +400,63 @@ class MemoryManager:
                     return self._postgres_backend.recall(embedding, n, modes=allowed_modes)
             except Exception as exc:
                 _warn_pg_fallback(exc)
-            return self._keyword_fallback(query)
+            return self._keyword_fallback(query, allowed_modes)
         if self._chroma:
             try:
                 embedding = self._embed_via_ollama(query)
-                if embedding and self._chroma.count() > 0:
-                    results = self._chroma.query(
-                        query_embeddings=[embedding],
-                        n_results=min(n, self._chroma.count()),
-                        include=["documents", "metadatas", "distances"],
-                    )
-                    docs  = results.get("documents",  [[]])[0]
-                    metas = results.get("metadatas",  [[]])[0]
-                    dists = results.get("distances",  [[]])[0]
-                    return [
-                        {"text": d, "metadata": m, "distance": dist}
-                        for d, m, dist in zip(docs, metas, dists)
-                    ]
+                if embedding:
+                    modes  = allowed_modes or [self.mode]
+                    merged = []
+                    for m in modes:
+                        coll = self._chroma_collection(m)
+                        if not coll:
+                            continue
+                        try:
+                            count = coll.count()
+                        except Exception:
+                            continue
+                        if count == 0:
+                            continue
+                        results = coll.query(
+                            query_embeddings=[embedding],
+                            n_results=min(n, count),
+                            include=["documents", "metadatas", "distances"],
+                        )
+                        docs  = results.get("documents",  [[]])[0]
+                        metas = results.get("metadatas",  [[]])[0]
+                        dists = results.get("distances",  [[]])[0]
+                        for d, mt, dist in zip(docs, metas, dists):
+                            merged.append({"text": d, "metadata": mt, "distance": dist})
+                    if merged:
+                        merged.sort(key=lambda x: x["distance"])
+                        return merged[:n]
             except Exception:
                 pass
-        return self._keyword_fallback(query)
+        return self._keyword_fallback(query, allowed_modes)
 
-    def _keyword_fallback(self, query: str):
-        facts   = self.get_facts()
+    def _keyword_fallback(self, query: str, allowed_modes: list[str] = None):
+        modes   = allowed_modes or [self.mode]
         q_words = set(query.lower().split())
         hits    = []
 
-        def _scan(obj, path=""):
+        def _scan(obj, mode, path=""):
             if isinstance(obj, str) and obj:
                 overlap = q_words & set(obj.lower().split())
                 if overlap:
                     hits.append({
                         "text":     obj,
-                        "metadata": {"source": "structured_facts", "path": path},
+                        "metadata": {"source": "structured_facts", "mode": mode, "path": path},
                         "distance": 1 - len(overlap) / max(len(q_words), 1),
                     })
             elif isinstance(obj, list):
                 for item in obj:
-                    _scan(item, path)
+                    _scan(item, mode, path)
             elif isinstance(obj, dict):
                 for k, v in obj.items():
-                    _scan(v, f"{path}.{k}" if path else k)
+                    _scan(v, mode, f"{path}.{k}" if path else k)
 
-        _scan(facts)
+        for m in modes:
+            _scan(self._facts_for_mode(m), m)
         hits.sort(key=lambda x: x["distance"])
         return hits[:MEMORY_RECALL_RESULTS]
 
