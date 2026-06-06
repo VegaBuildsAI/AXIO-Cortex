@@ -12,6 +12,7 @@ Commands:
   /new [name]        Start a new session
   /sessions          List all saved sessions
   /load <name>       Load a saved session
+  /loadfile <path>   Load a file or folder into shared context
   /save              Save current session
   /clear             Clear message history
   /delete <name>     Delete a saved session
@@ -24,7 +25,6 @@ from core.session      import SessionManager
 from core.logger       import AuditLogger
 from core.file_context import SESSION_CONTEXT
 from core.config       import MODELS
-from core.memory       import MemoryManager, _handle_memory_cmd
 from core.mode_memory  import ModeMemorySession
 from core.ui           import (
     mode_banner, status_line, divider,
@@ -43,12 +43,6 @@ def _select_default_chat_model(models: list[dict], configured_model: str) -> str
             return name
 
     return configured_model or "mistral:latest"
-
-
-def _save_and_store_memory(sm: SessionManager, mem: MemoryManager, session: dict, ollama):
-    sm.save(session)
-    if session.get("messages"):
-        mem.store_session(session, ollama_client=ollama)
 
 
 def _store_chat_memory(sm: SessionManager, memory_session: ModeMemorySession, session: dict, ollama):
@@ -78,6 +72,12 @@ HELP = f"""
   {YELLOW}/delete <name>{RESET}     Delete a saved session
   {YELLOW}/info{RESET}              Session info
   {YELLOW}/exit{RESET}              Save and quit
+
+{BOLD}File context:{RESET}
+  {YELLOW}/loadfile <path>{RESET}   Load a file or folder into shared context
+  {YELLOW}/browse{RESET}            Pick a folder to load into context
+  {YELLOW}/loaded{RESET}            Show loaded file context
+  {YELLOW}/unload{RESET}            Clear loaded file context
 """
 
 
@@ -88,7 +88,6 @@ def run(initial_model: str = "", initial_session: str = None):
     ollama = OllamaClient()
     sm     = SessionManager()
     logger = AuditLogger("chat")
-    mem    = MemoryManager("chat")
     memory = ModeMemorySession("chat")
 
     # Try to init Claude (optional)
@@ -255,11 +254,11 @@ def run(initial_model: str = "", initial_session: str = None):
             elif cmd in ("/browse files", "/browsefiles"):
                 print(SESSION_CONTEXT.load_browse_files())
 
-            elif cmd == "/load":
+            elif cmd == "/loadfile":
                 if arg:
                     print(SESSION_CONTEXT.load_path(arg))
                 else:
-                    print(f"  {warn('Usage: /load <file or folder path>')}\n")
+                    print(f"  {warn('Usage: /loadfile <file or folder path>')}\n")
 
             elif cmd in ("/loaded", "/context", "/files"):
                 print(SESSION_CONTEXT.list_str())

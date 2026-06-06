@@ -113,6 +113,60 @@ class PostgresMemoryBackendUnitTests(unittest.TestCase):
         self.assertEqual(params[1], ["code", "cowork", "chat", "console"])
         self.assertEqual(rows[0]["metadata"]["mode"], "cowork")
 
+    def test_persist_session_writes_session_messages_and_embedding(self):
+        conn = FakeConnection()
+        backend = PostgresMemoryBackend("chat", connection_factory=lambda: conn)
+        session = {
+            "name": "chat_1", "mode": "chat", "model": "mistral",
+            "created": "2026-06-06T10:00:00", "updated": "2026-06-06T10:05:00",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
+        }
+
+        sid = backend.persist_session(session, "a summary", [0.0] * 768)
+
+        joined = "\n".join(call[0] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO sessions", joined)
+        self.assertEqual(joined.count("INSERT INTO messages"), 2)
+        self.assertIn("INSERT INTO memory_embeddings", joined)
+        self.assertIsInstance(sid, str)
+        self.assertEqual(conn.commits, 1)
+
+    def test_persist_session_without_embedding_skips_embeddings_table(self):
+        conn = FakeConnection()
+        backend = PostgresMemoryBackend("chat", connection_factory=lambda: conn)
+        session = {
+            "name": "c", "mode": "chat", "model": "m",
+            "created": "", "updated": "",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        backend.persist_session(session, "summary", None)
+
+        joined = "\n".join(call[0] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO sessions", joined)
+        self.assertNotIn("INSERT INTO memory_embeddings", joined)
+
+    def test_persist_session_rejects_wrong_embedding_dimension(self):
+        conn = FakeConnection()
+        backend = PostgresMemoryBackend("chat", connection_factory=lambda: conn)
+        session = {"messages": [{"role": "user", "content": "hi"}]}
+
+        with self.assertRaises(ValueError):
+            backend.persist_session(session, "summary", [0.1, 0.2])
+
+    def test_update_facts_records_source_session_id(self):
+        conn = FakeConnection()
+        backend = PostgresMemoryBackend("chat", connection_factory=lambda: conn)
+
+        backend.update_facts({"user_name": "Michael"}, source_session_id="sess-123")
+
+        sql, params = conn.cursor_obj.calls[-1]
+        self.assertIn("source_session_id", sql)
+        self.assertIn("sess-123", params)
+
 
 if __name__ == "__main__":
     unittest.main()

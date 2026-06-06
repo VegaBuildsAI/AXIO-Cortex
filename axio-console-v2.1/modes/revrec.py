@@ -11,12 +11,17 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from core.ui    import mode_banner, YELLOW, RESET, GREEN, lo, ok, err
+from core.ui     import mode_banner, YELLOW, RESET, GREEN, lo, ok, err
 from core.memory import MemoryManager, _handle_memory_cmd
+from core.models import OllamaClient
 
 
 def run():
-    """Entry point called by axio.py. Delegates to rev_agent.main()."""
+    """Entry point called by axio.py. Delegates to rev_agent.main().
+
+    RevRec memory is isolated: it captures the real tasks analysed during the
+    session and stores them only in the revrec namespace (never console).
+    """
     mode_banner(
         "revrec",
         "ASC 606 / IFRS 15 specialist  |  Excel models  |  KPMG Handbook Dec 2025",
@@ -34,6 +39,16 @@ def run():
     # rev_agent's SYSTEM_PROMPT before starting the interactive loop
     memory_prefix = mem.build_memory_prefix("revenue recognition ASC 606 client deal")
 
+    # Real session accumulator -- populated from actual analysed tasks
+    session = {
+        "name":     f"revrec_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        "mode":     "revrec",
+        "model":    "qwen3:14b",
+        "created":  datetime.now().isoformat(),
+        "updated":  datetime.now().isoformat(),
+        "messages": [],
+    }
+
     rev_agent = None
     try:
         import rev_agent
@@ -49,6 +64,26 @@ def run():
                 _handle_memory_cmd(cmd, mem)
         rev_agent._memory_cmd_handler = _revrec_handler
 
+        # Capture real tasks by wrapping rev_agent's two execution entry points.
+        # main() looks these up as module globals at call time, so patching the
+        # module attributes is enough -- no edits to rev_agent internals.
+        def _capture(orig):
+            def wrapped(task, *args, **kwargs):
+                result = orig(task, *args, **kwargs)
+                try:
+                    session["messages"].append(
+                        {"role": "user", "content": str(task)[:4000]}
+                    )
+                    session["updated"] = datetime.now().isoformat()
+                    mem.auto_update_facts(str(task), "")
+                except Exception:
+                    pass
+                return result
+            return wrapped
+
+        rev_agent.run_agent        = _capture(rev_agent.run_agent)
+        rev_agent.run_agent_claude = _capture(rev_agent.run_agent_claude)
+
         rev_agent.main()
 
     except ImportError:
@@ -59,18 +94,13 @@ def run():
     except Exception as e:
         print(f"  {err(f'RevRec error: {e}')}\n")
     finally:
-        # IOAF: always archive the session, even if rev_agent raised
-        _revrec_session = {
-            "name":     f"revrec_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            "mode":     "revrec",
-            "model":    getattr(rev_agent, "AGENT_MODEL", "qwen3:14b") if rev_agent else "qwen3:14b",
-            "created":  datetime.now().isoformat(),
-            "updated":  datetime.now().isoformat(),
-            "messages": [
-                {
-                    "role":    "user",
-                    "content": "RevRec session completed. ASC 606 / IFRS 15 analysis.",
-                }
-            ],
-        }
-        mem.store_session(_revrec_session)
+        # IOAF: archive the session only if real work happened.
+        # store_session() no-ops on empty message lists, and ISOLATED_MODES
+        # keeps this out of the shared console memory.
+        if rev_agent:
+            session["model"] = getattr(rev_agent, "AGENT_MODEL", "qwen3:14b")
+        session["updated"] = datetime.now().isoformat()
+        try:
+            mem.store_session(session, ollama_client=OllamaClient())
+        except Exception:
+            mem.store_session(session)

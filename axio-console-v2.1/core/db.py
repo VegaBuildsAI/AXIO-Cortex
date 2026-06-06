@@ -41,8 +41,28 @@ def _load_psycopg():
         ) from exc
 
 
+def _register_vector(conn):
+    """Best-effort registration of the pgvector type adapters on this connection.
+
+    With the `pgvector` package installed this gives clean, explicit handling
+    of embedding lists (and numpy arrays). It is not strictly required: pgvector
+    also defines an implicit float8[] -> vector cast, so psycopg's default array
+    adaptation still works without it. We therefore skip silently if the package
+    is absent rather than disabling the whole Postgres backend.
+    """
+    try:
+        from pgvector.psycopg import register_vector
+    except ImportError:
+        return
+    try:
+        register_vector(conn)
+    except Exception:
+        pass
+
+
 @contextmanager
 def connect():
     psycopg, dict_row = _load_psycopg()
     with psycopg.connect(get_database_dsn(), row_factory=dict_row) as conn:
+        _register_vector(conn)
         yield conn
