@@ -251,7 +251,7 @@ class MemoryManager:
                 pass
         return dict(_DEFAULT_FACTS.get(self.mode, {}))
 
-    def update_facts(self, patch: dict):
+    def update_facts(self, patch: dict, source_session_id: str = None):
         if self._postgres_backend:
             try:
                 facts = self.get_facts()
@@ -267,7 +267,7 @@ class MemoryManager:
                     else:
                         facts[key] = value
                 facts["last_session"] = datetime.now().isoformat()
-                self._postgres_backend.update_facts(facts)
+                self._postgres_backend.update_facts(facts, source_session_id=source_session_id)
                 return
             except Exception as exc:
                 _warn_pg_fallback(exc)
@@ -523,20 +523,38 @@ class MemoryManager:
         summary = self._summarize_session(session, ollama_client)
         if not summary:
             return
-        self.store_chunk(
-            text=summary,
-            metadata={
-                "session_name":  session.get("name", ""),
-                "mode":          session.get("mode", self.mode),
-                "model":         session.get("model", ""),
-                "message_count": str(len(session.get("messages", []))),
-                "created":       session.get("created", ""),
+
+        session_id = None
+        if self._postgres_backend:
+            # Postgres is the system of record: persist the full session
+            # (Tier 1) + messages + summary embedding (Tier 2) in one place,
+            # and link the facts written below back to it.
+            try:
+                embedding = self._embed_via_ollama(summary)
+                session_id = self._postgres_backend.persist_session(
+                    session, summary, embedding,
+                )
+            except Exception as exc:
+                _warn_pg_fallback(exc)
+        else:
+            self.store_chunk(
+                text=summary,
+                metadata={
+                    "session_name":  session.get("name", ""),
+                    "mode":          session.get("mode", self.mode),
+                    "model":         session.get("model", ""),
+                    "message_count": str(len(session.get("messages", []))),
+                    "created":       session.get("created", ""),
+                },
+            )
+
+        self.update_facts(
+            {
+                "last_session": session.get("updated", datetime.now().isoformat()),
+                "notes":        [summary[:300]],
             },
+            source_session_id=session_id,
         )
-        self.update_facts({
-            "last_session": session.get("updated", datetime.now().isoformat()),
-            "notes":        [summary[:300]],
-        })
         session_mode = session.get("mode", self.mode)
         if session_mode not in ISOLATED_MODES:
             self._update_console_master(session_mode, summary)
