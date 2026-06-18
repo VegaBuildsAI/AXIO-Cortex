@@ -54,7 +54,7 @@ CLAUDE_MAX_TOKENS = int(os.getenv("CLAUDE_MAX_TOKENS", "4096"))
 #  LIMITS
 # ---------------------------------------------------------
 MAX_ITERS      = 20
-MAX_FILE_BYTES = 80_000
+MAX_FILE_BYTES = 200_000
 MAX_FILE_CHARS = 8_000
 CONTEXT_LIMIT  = 50       # max messages before session pruning
 RETRY_ATTEMPTS = 3

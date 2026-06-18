@@ -358,6 +358,30 @@ def build_code_task(task: str, file_context: str = "", memory_prefix: str = "") 
     return task
 
 
+# ─────────────────────────────────────────────────────────
+#  Continue-nudge: stop the agent from ENDING on a planning
+#  turn that has no tool call. The model must act, not narrate.
+# ─────────────────────────────────────────────────────────
+MAX_CONSEC_NUDGES = 2
+
+_NUDGE = (
+    "Continue working: call the tools needed to FINISH and VERIFY the task. "
+    "Do not just describe what you will do — actually do it now. If the entire "
+    "task is already complete and verified, reply with exactly TASK_COMPLETE "
+    "followed by a short summary."
+)
+
+
+def _is_complete_signal(text: str) -> bool:
+    t = (text or "").upper()
+    return "TASK_COMPLETE" in t or "TAREA_COMPLETA" in t
+
+
+def _strip_complete_signal(text: str) -> str:
+    import re
+    return re.sub(r"(?i)\b(TASK_COMPLETE|TAREA_COMPLETA)\b[:\-\s]*", "", text or "").strip()
+
+
 def _run_ollama_agent(task: str, model: str, ollama: OllamaClient, logger: AuditLogger):
     import time
     messages = [
@@ -366,6 +390,7 @@ def _run_ollama_agent(task: str, model: str, ollama: OllamaClient, logger: Audit
     ]
     print(f"\n  {lo(f'model: {model} | max steps: {MAX_ITERS}')}\n")
     start = time.time()
+    nudges = 0
 
     for iteration in range(MAX_ITERS):
         spinner = Spinner(f"[{model}] step {iteration + 1}").start()
@@ -382,11 +407,19 @@ def _run_ollama_agent(task: str, model: str, ollama: OllamaClient, logger: Audit
         content    = msg.get("content", "").strip()
 
         if not tool_calls:
-            elapsed = round(time.time() - start, 1)
-            print(f"\n  {CYAN}[{model}]{RESET} {content}")
-            print(f"\n  {lo(f'Done in {iteration+1} step(s), {elapsed}s')}\n")
-            return content
+            if _is_complete_signal(content) or nudges >= MAX_CONSEC_NUDGES:
+                elapsed = round(time.time() - start, 1)
+                final = _strip_complete_signal(content)
+                print(f"\n  {CYAN}[{model}]{RESET} {final}")
+                print(f"\n  {lo(f'Done in {iteration+1} step(s), {elapsed}s')}\n")
+                return final
+            nudges += 1
+            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "user", "content": _NUDGE})
+            print(f"  {lo('(continue) sin herramientas; pidiendo al agente que ejecute...')}")
+            continue
 
+        nudges = 0
         messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
 
         for tc in tool_calls:
@@ -422,6 +455,7 @@ def _run_claude_agent(task: str, claude: ClaudeClient, logger: AuditLogger):
     messages = [{"role": "user", "content": task}]
     print(f"\n  {lo(f'model: {CLAUDE_MODEL} (Claude API) | max steps: {MAX_ITERS}')}\n")
     start = time.time()
+    nudges = 0
 
     for iteration in range(MAX_ITERS):
         spinner = Spinner(f"[Claude] step {iteration + 1}").start()
@@ -443,12 +477,19 @@ def _run_claude_agent(task: str, claude: ClaudeClient, logger: AuditLogger):
         messages.append({"role": "assistant", "content": resp.content})
 
         if resp.stop_reason != "tool_use" or not tool_uses:
-            elapsed    = round(time.time() - start, 1)
             final_text = "\n".join(text_parts).strip()
-            print(f"\n  {CYAN}[Claude]{RESET} {final_text}")
-            print(f"\n  {lo(f'Done in {iteration+1} step(s), {elapsed}s')}\n")
-            return final_text
+            if _is_complete_signal(final_text) or nudges >= MAX_CONSEC_NUDGES:
+                elapsed = round(time.time() - start, 1)
+                out = _strip_complete_signal(final_text)
+                print(f"\n  {CYAN}[Claude]{RESET} {out}")
+                print(f"\n  {lo(f'Done in {iteration+1} step(s), {elapsed}s')}\n")
+                return out
+            nudges += 1
+            messages.append({"role": "user", "content": _NUDGE})
+            print(f"  {lo('(continue) sin herramientas; pidiendo a Claude que ejecute...')}")
+            continue
 
+        nudges = 0
         tool_results = []
         for tu in tool_uses:
             args     = tu.input if isinstance(tu.input, dict) else {}
