@@ -15,6 +15,21 @@ open-source LLMs as the default backend, with the Anthropic Claude API as the pr
 
 ---
 
+## Architecture at a Glance
+
+<div align="center">
+
+<img src="diagrams/AXIO-Architecture.svg" alt="AXIO Platform — IOAF Architecture" width="900" />
+
+<sub><b>AXIO Platform — IOAF Architecture.</b> Three bands: (1) the four-mode platform workflow,
+(2) the IOAF three-tier memory system, and (3) model routing &amp; fallback.<br/>
+Full write-up in <a href="docs/ARCHITECTURE.md">docs/ARCHITECTURE.md</a> ·
+regenerate with <code>py tools/gen_arch.py</code>.</sub>
+
+</div>
+
+---
+
 ## Launch Command
 
 ```
