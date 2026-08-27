@@ -1,0 +1,9 @@
+{
+  "name": "python-package",
+  "files": {
+    "README.md": "# {{PROJECT_NAME}}\n\nGenerated from the AXIO python-package template.\n",
+    "pyproject.toml": "[build-system]\nrequires = [\"setuptools>=68\"]\nbuild-backend = \"setuptools.build_meta\"\n\n[project]\nname = \"{{PROJECT_NAME}}\"\nversion = \"0.1.0\"\nrequires-python = \">=3.12\"\n",
+    "src/{{PACKAGE_NAME}}/__init__.py": "\"\"\"Public API for {{PROJECT_NAME}}.\"\"\"\n",
+    "tests/test_package.py": "import unittest\n\n\nclass PackageTests(unittest.TestCase):\n    def test_placeholder(self):\n        self.assertTrue(True)\n"
+  }
+}

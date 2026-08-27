@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from core.memory import MemoryManager
@@ -21,11 +23,30 @@ class FakePgBackend:
 
 
 class MemorySessionPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.journal_patch = patch(
+            "core.memory_durability.JOURNAL_DIR",
+            Path(self.tmp.name) / "journals",
+        )
+        self.outbox_patch = patch(
+            "core.memory_durability.PENDING_DIR",
+            Path(self.tmp.name) / "outbox" / "pending",
+        )
+        self.journal_patch.start()
+        self.outbox_patch.start()
+
+    def tearDown(self):
+        self.outbox_patch.stop()
+        self.journal_patch.stop()
+        self.tmp.cleanup()
+
     def _manager(self):
         mem = MemoryManager("chat")
         mem._postgres_backend = FakePgBackend()
         mem._chroma = None
         mem._chroma_client = None
+        mem._facts_path = Path(self.tmp.name) / "chat_memory.json"
         return mem
 
     def test_store_session_persists_session_and_links_facts(self):

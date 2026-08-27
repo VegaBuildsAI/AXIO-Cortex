@@ -10,6 +10,8 @@ __pycache__/
 *.so
 .Python
 build/
+!ui/build/
+!ui/build/sites-vite-plugin.ts
 develop-eggs/
 dist/
 downloads/
@@ -46,8 +48,10 @@ Thumbs.db
 
 # Application
 .axio/sessions/  # Optional: exclude session storage if you prefer
+.axio-data/
 logs/
 *.log
+.tmp-ui/
 
 # Security
 *.key

@@ -28,6 +28,9 @@ def _make_memory_session(messages):
     ms.allowed_recall_modes = ["chat"]
     ms.session = {"messages": messages}
     ms.turn_metadata = []
+    # Exit-consolidation spawning has its own unit tests; this fixture only
+    # verifies Chat's synchronous persistence path.
+    ms._exit_consolidation_started = True
     return ms
 
 

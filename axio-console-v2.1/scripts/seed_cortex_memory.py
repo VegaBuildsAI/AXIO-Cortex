@@ -79,14 +79,13 @@ def main() -> int:
 
     # Identity facts only when seeding the identity doc into the console master.
     if target_mode == "console":
-        MemoryManager("chat").update_facts({
-            "user_name": "Michael",
-            "preferred_language": "Spanish",
-            "preferred_tone": "concise, direct, technically precise",
-            "key_projects": ["AXIO", "AXIO Cortex", "IOAF"],
-            "notes": ["Michael is the creator/architect of AXIO; building AXIO Cortex living memory."],
-        })
         mgr.update_facts({
+            "global_profile": {
+                "user_name": "Michael",
+                "preferred_language": "Spanish",
+                "preferred_tone": "concise, direct, technically precise",
+                "key_projects": ["AXIO", "AXIO Cortex", "IOAF"],
+            },
             "cross_mode_entities": ["Michael", "AXIO", "AXIO Cortex", "IOAF", "VegaBuildsAI/AXIO-Cortex"],
             "global_preferences": {
                 "language": "Spanish",

@@ -1,39 +1,36 @@
 # routing.yaml — AxioModel Improvement v2.1
 #
-# BENCHMARK-INFORMED ROUTING (ASSESS-006, 2026-05-09):
-#   revenue_analysis : qwen3:14b scored 85/Good  → primary revenue route
-#   coding_agent     : qwen3-coder:30b scored 92/coding → coding-only route
-#   qwen3-coder:30b  : REMOVED from revenue — coding specialist only
-#   All routes       : max_context capped to prevent Ollama OOM/timeout
+# HYBRID ROUTING (local base + Claude boost):
+#   gemma4:12b       local base — chat, quick drafts, summaries, vision
+#   claude-opus-4-8  frontier agentic tier — code / reasoning / revenue / premium
+#   claude-sonnet-4-6 lighter Claude alternative (switch in-app: model sonnet)
+#   Under LOCAL_ONLY=1 the agentic routes fall back to gemma4:12b.
 
 model_router:
-  default_model: "qwen3:8b"
+  default_model: "gemma4:12b"
   routes:
     quick_chat:
-      model: "qwen3:8b"
+      model: "gemma4:12b"
       temperature: 0.3
-      max_context: 4096         # capped from 8192
+      max_context: 4096
 
     revenue_analysis:
-      model: "qwen3:14b"        # restored — scored 85/Good on REVREC-001
-      temperature: 0.2
-      max_context: 8192         # capped from 16384
+      model: "claude-opus-4-8"      # boosts to Claude; local fallback gemma4:12b
+      effort: "max"
 
     coding_agent:
-      model: "qwen3-coder:30b"  # coding-only; removed from revenue route
-      temperature: 0.1
-      max_context: 16384        # capped from 32768
+      model: "claude-opus-4-8"      # Code mode; local fallback gemma4:12b
+      effort: "max"
 
     exact_math:
       tool: "python"
       model: null
 
     premium_reasoning:
-      provider: "claude_api"
-      model: "claude-sonnet-4-6"
-      fallback:                 # local fallback if Claude API unavailable
-        - model: "qwen3:14b"    # better reasoning fallback than coder model
-          max_context: 8192
+      provider: "anthropic"
+      model: "claude-opus-4-8"
+      effort: "max"
+      local_fallback: "gemma4:12b"  # used when LOCAL_ONLY=1 or no API key
       trigger:
         - "large codebase"
         - "complex architecture"

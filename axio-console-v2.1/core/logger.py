@@ -69,6 +69,31 @@ class AuditLogger:
         }
         self._write(entry)
 
+    def log_usage(
+        self,
+        model: str,
+        tokens: dict,
+        cost_usd: float = None,
+        route: str = "",
+        elapsed: float = None,
+    ):
+        """Log token usage + estimated cost for a Claude turn.
+
+        tokens: {input, output, cache_read, cache_write}.
+        """
+        entry = {
+            "ts":       datetime.now().isoformat(),
+            "mode":     self.mode,
+            "type":     "usage",
+            "model":    model,
+            "route":    route,
+            "tokens":   tokens,
+            "cost_usd": round(cost_usd, 6) if cost_usd is not None else None,
+        }
+        if elapsed is not None:
+            entry["elapsed_seconds"] = elapsed
+        self._write(entry)
+
     def log_event(self, event: str, detail: str = ""):
         """Log a generic lifecycle event (session created, mode switched, etc.)."""
         entry = {
@@ -79,6 +104,16 @@ class AuditLogger:
             "detail": detail[:200],
         }
         self._write(entry)
+
+    def log_metrics(self, event: str, metrics: dict):
+        """Log structured operational metrics without flattening or truncation."""
+        self._write({
+            "ts": datetime.now().isoformat(),
+            "mode": self.mode,
+            "type": "metrics",
+            "event": event,
+            "metrics": metrics,
+        })
 
     def _write(self, entry: dict):
         with self.path.open("a", encoding="utf-8") as f:

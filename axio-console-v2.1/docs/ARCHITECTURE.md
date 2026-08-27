@@ -1,5 +1,7 @@
 # AXIO Platform — IOAF Architecture
 
+> ⚠️ **STALE (superseded).** This describes the May/June ChromaDB-era memory design (mistral/qwen3 models, ChromaDB as Tier-2 primary). The current architecture is Postgres-primary "Cortex" — see **`docs/CORTEX.md`** and **`CLAUDE.md`** for accurate current state. Kept for the diagram only.
+
 > Unified architecture diagram for AXIO v2.1 (Final Debugged Release 1).
 > Reconstructed faithfully from the three FigJam source files (`*.jam`).
 

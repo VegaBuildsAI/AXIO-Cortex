@@ -9,7 +9,7 @@ Routing:
 
 Usage:
   python scripts/benchmark_models.py              # run all models, all tests
-  python scripts/benchmark_models.py --model qwen3:8b   # single model
+  python scripts/benchmark_models.py --model gemma4:12b   # single model
   python scripts/benchmark_models.py --test MATH-001     # single test
 """
 
@@ -34,10 +34,7 @@ OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 MODELS = [
-    "qwen3:8b",
-    "qwen3:14b",
-    "qwen3-coder:30b",
-    "llama3.1:8b",
+    "gemma4:12b",
 ]
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
