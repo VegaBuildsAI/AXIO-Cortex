@@ -1836,7 +1836,7 @@ HELP_TEXT = """
 \033[1mOther commands:\033[0m
   tools        list all available tools
   outputs      list files created in this session
-  model <name> switch model (default: qwen3.6:latest)
+  model <name> switch model (default: gemma4:12b)
   help         show this message
   exit         quit
 
