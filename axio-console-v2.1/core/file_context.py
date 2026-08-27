@@ -42,7 +42,7 @@ def _tk_available() -> bool:
         return False
 
 
-def browse_folder(title: str = "Select folder") -> str | None:
+def browse_folder(title: str = "Select folder to load") -> str | None:
     """
     Open the native Windows folder-picker dialog.
     Returns the selected path as a string, or None if cancelled.
@@ -62,7 +62,7 @@ def browse_folder(title: str = "Select folder") -> str | None:
 
 
 def browse_files(
-    title: str = "Select contract file(s)",
+    title: str = "Select file(s) to load",
     extensions: set[str] | None = None,
 ) -> list[str]:
     """
@@ -182,7 +182,7 @@ class FileContext:
                 "\033[33m  tkinter not available — type the path manually:\033[0m\n"
                 "  \033[90mload \"C:\\path\\to\\folder\"\033[0m"
             )
-        path = browse_folder("Select contract folder to load")
+        path = browse_folder("Select folder to load in AXIO")
         if not path:
             return "\033[90m  Cancelled.\033[0m"
         return self.load_folder(path)

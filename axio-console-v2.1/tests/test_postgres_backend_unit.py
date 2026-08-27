@@ -70,6 +70,61 @@ class PostgresMemoryBackendUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             backend.store_chunk("summary", [0.1, 0.2], {"mode": "chat"})
 
+    def test_find_similar_is_scoped_and_applies_threshold(self):
+        conn = FakeConnection()
+        conn.cursor_obj.row = {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "content": "canonical lesson",
+            "embedding": [0.0] * 768,
+            "metadata": {"source_type": "self_learned"},
+            "created_at": "2026-08-24T00:00:00",
+            "similarity": 0.95,
+        }
+        backend = PostgresMemoryBackend("console", connection_factory=lambda: conn)
+
+        result = backend.find_similar([0.0] * 768, "self_learned", threshold=0.92)
+
+        sql, params = conn.cursor_obj.calls[-1]
+        self.assertIn("WHERE mode = %s AND source_type = %s", sql)
+        self.assertEqual(params[1:3], ("console", "self_learned"))
+        self.assertEqual(result["content"], "canonical lesson")
+        self.assertIsNone(backend.find_similar([0.0] * 768, "self_learned", threshold=0.99))
+
+    def test_update_chunk_metadata_returns_mirror_payload(self):
+        conn = FakeConnection()
+        conn.cursor_obj.row = {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "content": "lesson",
+            "embedding": [0.0] * 768,
+            "metadata": {"reinforced_count": 2},
+            "created_at": "2026-08-24T00:00:00",
+        }
+        backend = PostgresMemoryBackend("console", connection_factory=lambda: conn)
+
+        result = backend.update_chunk_metadata(
+            "00000000-0000-0000-0000-000000000001",
+            {"reinforced_count": 2},
+        )
+
+        sql, params = conn.cursor_obj.calls[-1]
+        self.assertIn("UPDATE memory_embeddings", sql)
+        self.assertEqual(params[2], "console")
+        self.assertEqual(result["content"], "lesson")
+        self.assertEqual(conn.commits, 1)
+
+    def test_recent_messages_joins_session_mode_and_uses_watermark(self):
+        conn = FakeConnection()
+        conn.cursor_obj.rows = [{"id": "m1", "mode": "code", "role": "assistant"}]
+        backend = PostgresMemoryBackend("console", connection_factory=lambda: conn)
+
+        rows = backend.recent_messages("2026-08-24T00:00:00+00:00", limit=50)
+
+        sql, params = conn.cursor_obj.calls[-1]
+        self.assertIn("JOIN sessions", sql)
+        self.assertIn("m.created_at > %s", sql)
+        self.assertEqual(params[-1], 50)
+        self.assertEqual(rows[0]["mode"], "code")
+
     def test_recall_orders_by_vector_distance(self):
         conn = FakeConnection()
         conn.cursor_obj.rows = [
@@ -83,6 +138,7 @@ class PostgresMemoryBackendUnitTests(unittest.TestCase):
         self.assertEqual(rows[0]["distance"], 0.2)
         executed_sql = "\n".join(call[0] for call in conn.cursor_obj.calls)
         self.assertIn("embedding <=>", executed_sql)
+        self.assertIn("metadata ? 'superseded_by'", executed_sql)
 
     def test_recall_without_modes_filters_to_backend_mode(self):
         conn = FakeConnection()
@@ -132,6 +188,34 @@ class PostgresMemoryBackendUnitTests(unittest.TestCase):
         self.assertEqual(joined.count("INSERT INTO messages"), 2)
         self.assertIn("INSERT INTO memory_embeddings", joined)
         self.assertIsInstance(sid, str)
+        self.assertEqual(conn.commits, 1)
+
+    def test_persist_live_session_upserts_before_clean_exit(self):
+        conn = FakeConnection()
+        backend = PostgresMemoryBackend("cowork", connection_factory=lambda: conn)
+        session = {
+            "id": "c4d7c02e-f4c2-4c4f-b85e-a8d879271c83",
+            "name": "cowork_live",
+            "mode": "cowork",
+            "model": "gemma4:12b",
+            "created": "2026-08-24T19:00:00",
+            "messages": [
+                {
+                    "id": "669471ae-e0ad-48e2-b406-107941492c61",
+                    "role": "user",
+                    "content": "persist before model completes",
+                    "created_at": "2026-08-24T19:00:01",
+                }
+            ],
+        }
+
+        sid = backend.persist_live_session(session)
+
+        joined = "\n".join(call[0] for call in conn.cursor_obj.calls)
+        self.assertIn("ON CONFLICT (id)", joined)
+        self.assertIn("INSERT INTO sessions", joined)
+        self.assertIn("INSERT INTO messages", joined)
+        self.assertEqual(sid, session["id"])
         self.assertEqual(conn.commits, 1)
 
     def test_persist_session_without_embedding_skips_embeddings_table(self):

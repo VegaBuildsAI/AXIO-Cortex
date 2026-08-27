@@ -20,6 +20,16 @@ def _ts(value) -> datetime:
     return datetime.now()
 
 
+def _uuid_str(value=None, seed: str = "") -> str:
+    """Return a Postgres-safe UUID, deterministically when a legacy id is used."""
+    if value:
+        try:
+            return str(uuid.UUID(str(value)))
+        except ValueError:
+            return str(uuid.uuid5(uuid.NAMESPACE_URL, f"axio:{seed}:{value}"))
+    return str(uuid.uuid4())
+
+
 class PostgresMemoryBackend:
     def __init__(self, mode: str, connection_factory: Callable = None):
         self.mode = mode
@@ -27,6 +37,11 @@ class PostgresMemoryBackend:
 
     def _connection(self):
         return self.connection_factory()
+
+    def healthcheck(self) -> bool:
+        with self._connection() as conn:
+            row = conn.execute("SELECT 1 AS ok").fetchone()
+        return bool(row and row["ok"] == 1)
 
     def get_facts(self) -> dict:
         with self._connection() as conn:
@@ -61,7 +76,13 @@ class PostgresMemoryBackend:
                 )
             conn.commit()
 
-    def store_chunk(self, text: str, embedding: list[float], metadata: dict = None):
+    def store_chunk(
+        self,
+        text: str,
+        embedding: list[float],
+        metadata: dict = None,
+        chunk_id: str = None,
+    ):
         if len(embedding) != 768:
             raise ValueError(
                 f"Expected embedding dimension 768, got {len(embedding)}"
@@ -74,9 +95,16 @@ class PostgresMemoryBackend:
                 INSERT INTO memory_embeddings
                     (id, mode, source_type, content, embedding, created_at, metadata)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    mode = EXCLUDED.mode,
+                    source_type = EXCLUDED.source_type,
+                    content = EXCLUDED.content,
+                    embedding = EXCLUDED.embedding,
+                    metadata = EXCLUDED.metadata
                 """,
                 (
-                    str(uuid.uuid4()),
+                    _uuid_str(chunk_id, "chunk"),
                     self.mode,
                     meta.get("source_type", "session_summary"),
                     text,
@@ -86,6 +114,154 @@ class PostgresMemoryBackend:
                 ),
             )
             conn.commit()
+
+    def find_similar(
+        self,
+        embedding: list[float],
+        source_type: str,
+        threshold: float = 0.0,
+    ) -> dict | None:
+        """Return the nearest same-mode/source chunk when it clears threshold."""
+        if len(embedding) != 768:
+            raise ValueError(
+                f"Expected embedding dimension 768, got {len(embedding)}"
+            )
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, content, embedding, metadata, created_at,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM memory_embeddings
+                WHERE mode = %s AND source_type = %s
+                  AND NOT (metadata ? 'superseded_by')
+                ORDER BY embedding <=> %s::vector
+                LIMIT 1
+                """,
+                (embedding, self.mode, source_type, embedding),
+            ).fetchone()
+        if not row or float(row["similarity"]) < float(threshold):
+            return None
+        return dict(row)
+
+    def list_chunks(self, source_type: str, limit: int = 1000) -> list[dict]:
+        """List derived chunks for maintenance/reporting; never raw messages."""
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, content, embedding, metadata, created_at
+                FROM memory_embeddings
+                WHERE mode = %s AND source_type = %s
+                ORDER BY created_at, id
+                LIMIT %s
+                """,
+                (self.mode, source_type, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_chunks(self, source_type: str) -> int:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS count FROM memory_embeddings "
+                "WHERE mode = %s AND source_type = %s",
+                (self.mode, source_type),
+            ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def update_chunk_metadata(self, chunk_id: str, metadata: dict) -> dict | None:
+        """Replace metadata for one derived chunk and return its mirror payload."""
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                UPDATE memory_embeddings
+                SET metadata = %s
+                WHERE id = %s AND mode = %s
+                RETURNING id, content, embedding, metadata, created_at
+                """,
+                (json.dumps(metadata), _uuid_str(chunk_id, "chunk"), self.mode),
+            ).fetchone()
+            conn.commit()
+        return dict(row) if row else None
+
+    def recent_messages(self, since_iso=None, limit: int = 500) -> list[dict]:
+        """Read incremental message material for local self-memory mining."""
+        if since_iso:
+            where = "WHERE m.created_at > %s"
+            params = (_ts(since_iso), limit)
+        else:
+            where = ""
+            params = (limit,)
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT m.id, m.session_id, s.mode, m.role, m.content,
+                       m.created_at, m.model, m.metadata
+                FROM messages AS m
+                JOIN sessions AS s ON s.id = m.session_id
+                {where}
+                ORDER BY m.created_at, m.id
+                LIMIT %s
+                """,
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def persist_live_session(self, session: dict) -> str:
+        """Upsert the raw session and messages without waiting for clean exit."""
+        session_id = _uuid_str(session.get("id"), "session")
+        session["id"] = session_id
+        mode = session.get("mode", self.mode)
+        model = session.get("model", "")
+        messages = session.get("messages", [])
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO sessions (id, mode, title, started_at, ended_at, summary, metadata)
+                VALUES (%s, %s, %s, %s, NULL, '', %s)
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    mode = EXCLUDED.mode,
+                    title = EXCLUDED.title,
+                    metadata = EXCLUDED.metadata
+                """,
+                (
+                    session_id,
+                    mode,
+                    session.get("name", ""),
+                    _ts(session.get("created")),
+                    json.dumps({"model": model, "live": True}),
+                ),
+            )
+            for index, message in enumerate(messages):
+                message_id = _uuid_str(
+                    message.get("id"),
+                    f"message:{session_id}:{index}",
+                )
+                message["id"] = message_id
+                conn.execute(
+                    """
+                    INSERT INTO messages
+                        (id, session_id, role, content, created_at, token_count, model, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id)
+                    DO UPDATE SET
+                        role = EXCLUDED.role,
+                        content = EXCLUDED.content,
+                        model = EXCLUDED.model,
+                        metadata = EXCLUDED.metadata
+                    """,
+                    (
+                        message_id,
+                        session_id,
+                        message.get("role", ""),
+                        message.get("content", ""),
+                        _ts(message.get("created_at")),
+                        None,
+                        model,
+                        json.dumps(message.get("metadata", {})),
+                    ),
+                )
+            conn.commit()
+        return session_id
 
     def persist_session(self, session: dict, summary: str, embedding: list[float] = None) -> str:
         """Persist a full session (Tier 1) + its summary embedding (Tier 2).
@@ -98,7 +274,8 @@ class PostgresMemoryBackend:
             raise ValueError(
                 f"Expected embedding dimension 768, got {len(embedding)}"
             )
-        session_id = str(uuid.uuid4())
+        session_id = _uuid_str(session.get("id"), "session")
+        session["id"] = session_id
         now = datetime.now()
         mode = session.get("mode", self.mode)
         model = session.get("model", "")
@@ -108,6 +285,13 @@ class PostgresMemoryBackend:
                 """
                 INSERT INTO sessions (id, mode, title, started_at, ended_at, summary, metadata)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    mode = EXCLUDED.mode,
+                    title = EXCLUDED.title,
+                    ended_at = EXCLUDED.ended_at,
+                    summary = EXCLUDED.summary,
+                    metadata = EXCLUDED.metadata
                 """,
                 (
                     session_id,
@@ -119,22 +303,33 @@ class PostgresMemoryBackend:
                     json.dumps({"model": model}),
                 ),
             )
-            for m in messages:
+            for index, m in enumerate(messages):
+                message_id = _uuid_str(
+                    m.get("id"),
+                    f"message:{session_id}:{index}",
+                )
+                m["id"] = message_id
                 conn.execute(
                     """
                     INSERT INTO messages
                         (id, session_id, role, content, created_at, token_count, model, metadata)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id)
+                    DO UPDATE SET
+                        role = EXCLUDED.role,
+                        content = EXCLUDED.content,
+                        model = EXCLUDED.model,
+                        metadata = EXCLUDED.metadata
                     """,
                     (
-                        str(uuid.uuid4()),
+                        message_id,
                         session_id,
                         m.get("role", ""),
                         m.get("content", ""),
-                        now,
+                        _ts(m.get("created_at")),
                         None,
                         model,
-                        json.dumps({}),
+                        json.dumps(m.get("metadata", {})),
                     ),
                 )
             if embedding is not None:
@@ -143,9 +338,16 @@ class PostgresMemoryBackend:
                     INSERT INTO memory_embeddings
                         (id, mode, session_id, source_type, source_id, content, embedding, created_at, metadata)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id)
+                    DO UPDATE SET
+                        mode = EXCLUDED.mode,
+                        session_id = EXCLUDED.session_id,
+                        content = EXCLUDED.content,
+                        embedding = EXCLUDED.embedding,
+                        metadata = EXCLUDED.metadata
                     """,
                     (
-                        str(uuid.uuid4()),
+                        str(uuid.uuid5(uuid.UUID(session_id), "summary")),
                         mode,
                         session_id,
                         "session_summary",
@@ -159,6 +361,41 @@ class PostgresMemoryBackend:
             conn.commit()
         return session_id
 
+    def delete_chunks(self, source_type: str, key: str, value: str) -> None:
+        if key not in {"doc", "path"}:
+            raise ValueError(f"Unsupported metadata key: {key}")
+        with self._connection() as conn:
+            conn.execute(
+                f"DELETE FROM memory_embeddings "
+                f"WHERE mode=%s AND source_type=%s AND metadata->>%s = %s",
+                (self.mode, source_type, key, value),
+            )
+            conn.commit()
+
+    def source_counts(self) -> list[dict]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT mode, source_type, count(*) AS count
+                FROM memory_embeddings
+                GROUP BY mode, source_type
+                ORDER BY mode, source_type
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def all_embeddings(self) -> list[dict]:
+        """Export the current canonical vectors for local Chroma bootstrap."""
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, mode, content, embedding, metadata
+                FROM memory_embeddings
+                ORDER BY created_at, id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def recall(self, embedding: list[float], n_results: int, modes: list[str] = None):
         if len(embedding) != 768:
             raise ValueError(
@@ -169,6 +406,7 @@ class PostgresMemoryBackend:
                 SELECT content, metadata, embedding <=> %s::vector AS distance
                 FROM memory_embeddings
                 WHERE mode = ANY(%s)
+                  AND NOT (metadata ? 'superseded_by')
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
                 """
@@ -178,6 +416,7 @@ class PostgresMemoryBackend:
                 SELECT content, metadata, embedding <=> %s::vector AS distance
                 FROM memory_embeddings
                 WHERE mode = %s
+                  AND NOT (metadata ? 'superseded_by')
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
                 """

@@ -162,12 +162,13 @@ def interactive():
 def main():
     args = [a for a in sys.argv[1:] if a]
 
-    # --claude flag: force every prompt through Claude Sonnet for this session
+    # --claude flag: force every prompt through the Claude tier for this session
     force_claude = "--claude" in args
     if force_claude:
         os.environ["FORCE_CLAUDE"] = "1"
         args = [a for a in args if a != "--claude"]
-        print(f"  {ok('Claude Sonnet mode active')}  {lo('(all prompts -> claude-sonnet-4-6)')}\n")
+        from core.config import CLAUDE_MODEL
+        print(f"  {ok('Claude mode active')}  {lo(f'(all prompts -> {CLAUDE_MODEL})')}\n")
 
     if args:
         mode = args[0].lower()

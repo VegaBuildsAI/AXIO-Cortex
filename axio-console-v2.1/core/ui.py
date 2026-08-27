@@ -93,6 +93,7 @@ def divider(color_code: str = DIM):
 # ─────────────────────────────────────────────────────────
 class Spinner:
     FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+    ASCII_FRAMES = ["|", "/", "-", "\\"]
 
     def __init__(self, label: str = "Thinking"):
         self.label   = label
@@ -101,8 +102,14 @@ class Spinner:
 
     def _spin(self):
         i = 0
+        frames = self.FRAMES
+        encoding = sys.stdout.encoding or "utf-8"
+        try:
+            "".join(frames).encode(encoding)
+        except (LookupError, UnicodeEncodeError):
+            frames = self.ASCII_FRAMES
         while not self._stop.is_set():
-            frame = self.FRAMES[i % len(self.FRAMES)]
+            frame = frames[i % len(frames)]
             print(f"\r  {CYAN}{frame}{RESET}  {self.label} ...", end="", flush=True)
             time.sleep(0.1)
             i += 1

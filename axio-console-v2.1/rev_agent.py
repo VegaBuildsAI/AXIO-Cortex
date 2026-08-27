@@ -14,6 +14,18 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from core.code_tools import build_default_registry, summarize_arguments
+from core.code_tools.finance_tools import build_finance_tools
+from core.code_tools.router import (
+    DynamicToolRouter,
+    LoopGuard,
+    TrajectoryLogger,
+    classify_complexity,
+    process_history,
+    step_budget,
+    truncate_observation,
+)
+
 try:
     import requests
 except ImportError:
@@ -66,15 +78,19 @@ except ImportError:
 # ---------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------
-BASE        = Path("C:/Users/AXIO/axio-console")
+BASE        = Path(__file__).resolve().parent
 LOG_FILE    = BASE / "logs/rev_agent_audit.jsonl"
 OUTPUT_DIR  = BASE / "workspaces/revenue-agent"
 OLLAMA_URL     = "http://127.0.0.1:11434/api/chat"
-AGENT_MODEL    = "qwen3:14b"
-FALLBACK_MODEL = "qwen3:8b"        # used if 14b times out
-CLAUDE_MODEL   = "claude-sonnet-4-6"
-MAX_ITERS      = 20
-TIMEOUT        = 600               # seconds — 14b needs up to ~8 min on complex tasks
+AGENT_MODEL    = os.environ.get("MODEL_REASONING", "gemma4:12b")   # local base
+FALLBACK_MODEL = os.environ.get("MODEL_FALLBACK", "gemma4:12b")    # light fallback
+# Claude tier for the RevRec agent (auto-upgrade on PDF/complex tasks).
+CLAUDE_MODEL   = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+CLAUDE_EFFORT  = os.environ.get("CLAUDE_EFFORT", "high")
+CLAUDE_MAX_TOKENS = int(os.environ.get("CLAUDE_MAX_TOKENS", "16000"))
+PROMPT_CACHE   = os.environ.get("PROMPT_CACHE", "1").strip() not in ("0", "false", "no", "")
+TIMEOUT        = 600               # seconds — local models may need several minutes
+TOOL_VISIBILITY_BUDGET = 8
 
 # Tasks that auto-route to Claude API (large context, PDF, complex multi-step)
 CLAUDE_TRIGGERS = [".pdf", "contract modification", "large contract", "full analysis"]
@@ -1227,16 +1243,22 @@ TOOL_MAP = {
     "run_command":                           tool_run_command,
 }
 
+def _approve_registry_tool(tool, args: dict) -> bool:
+    print(f"\n  \033[33m[AGENT] Requests {tool.risk} tool: {tool.name}\033[0m")
+    print(f"  \033[90m  {summarize_arguments(args)}\033[0m")
+    if tool.risk == "destructive":
+        return input("  Type DELETE to allow permanent deletion: ").strip() == "DELETE"
+    if tool.risk == "external":
+        return input("  Type ALLOW to authorize the external action: ").strip() == "ALLOW"
+    return input("  Allow? (y/n): ").strip().lower() == "y"
+
+
+REVREC_TOOLS = build_default_registry()
+REVREC_TOOLS.register_many(build_finance_tools(TOOLS, TOOL_MAP), category="finance")
+
+
 def execute_tool(name: str, args: dict) -> str:
-    fn = TOOL_MAP.get(name)
-    if not fn:
-        return f"ERROR: Unknown tool '{name}'"
-    try:
-        return fn(**args)
-    except TypeError as e:
-        return f"ERROR: Wrong arguments for {name}: {e}"
-    except Exception as e:
-        return f"ERROR: {e}"
+    return REVREC_TOOLS.execute(name, args, approve=_approve_registry_tool)
 
 # ---------------------------------------------------------------
 # Audit log
@@ -1360,6 +1382,58 @@ specific sections (e.g. pricing schedules, SOW, payment terms) if needed.
 - Never state a definitive conclusion on ambiguous facts — flag for human review
 """
 
+SYSTEM_PROMPT += """
+
+## SHARED AXIO HARNESS
+The harness exposes a stable core plus a small task-specific subset, never every registered
+tool at once. Use request_tool(name, reason) when a needed registered tool is hidden. After
+creating or changing any file, call verification_gate before giving the final answer.
+"""
+
+
+def _finance_preferred(task: str) -> list[str]:
+    """Select at most three RevRec tools; the escape hatch covers later phase changes."""
+    text = (task or "").lower()
+    preferred: list[str] = []
+    keyword_tools = (
+        ((".pdf", "pdf", "contract"), "read_pdf"),
+        (("analy", "asc 606", "ifrs 15", "performance obligation"), "analyze_contract"),
+        (("allocation", "ssp"), "create_allocation_schedule"),
+        (("deferred revenue", "rollforward"), "create_deferred_revenue_schedule"),
+        (("variable consideration", "constraint"), "create_variable_consideration_model"),
+        (("modification",), "create_contract_modification_analysis"),
+        (("memo",), "write_memo"),
+        (("excel", ".xlsx", "workbook"), "read_excel"),
+        (("outputs", "files created"), "list_outputs"),
+    )
+    for keywords, name in keyword_tools:
+        if any(keyword in text for keyword in keywords) and name not in preferred:
+            preferred.append(name)
+    for fallback in ("analyze_contract", "read_pdf", "list_outputs"):
+        if fallback not in preferred:
+            preferred.append(fallback)
+    return preferred[:3]
+
+
+def _start_revrec_harness(task: str, mode: str):
+    REVREC_TOOLS.start_task(task, [BASE, OUTPUT_DIR, Path.cwd()])
+    return (
+        DynamicToolRouter(
+            REVREC_TOOLS,
+            task,
+            budget=TOOL_VISIBILITY_BUDGET,
+            preferred_names=_finance_preferred(task),
+            visibility="dynamic",
+        ),
+        LoopGuard(),
+        TrajectoryLogger(mode),
+        step_budget(task),
+    )
+
+
+def _revrec_completion_status() -> tuple[bool, str]:
+    return REVREC_TOOLS.completion_status()
+
 # ---------------------------------------------------------------
 # Convert Ollama tool schemas -> Anthropic format
 # ---------------------------------------------------------------
@@ -1387,23 +1461,42 @@ def run_agent_claude(task: str):
         return
 
     client  = _anthropic.Anthropic(api_key=api_key)
-    tools   = _tools_for_claude()
+    router, guard, trajectory, max_steps = _start_revrec_harness(task, "revrec-claude")
     messages = [{"role": "user", "content": task}]
+    try:
+        from core import pricing as _pricing
+    except Exception:
+        _pricing = None
+    _usage_acc = {}
 
-    print(f"\n\033[90m  model: {CLAUDE_MODEL} (Claude API) | max steps: {MAX_ITERS}\033[0m\n")
+    print(
+        f"\n\033[90m  model: {CLAUDE_MODEL} (Claude API) | tools: dynamic "
+        f"<={TOOL_VISIBILITY_BUDGET} of {len(REVREC_TOOLS.tools)} | "
+        f"complexity: {classify_complexity(task)} | max steps: {max_steps}\033[0m\n"
+    )
     start = time.time()
+    gate_nudges = 0
 
-    for iteration in range(MAX_ITERS):
+    for iteration in range(max_steps):
+        messages = process_history(messages, "claude")
+        tools = router.schemas("claude")
         spinner = Spinner(f"[{CLAUDE_MODEL}] step {iteration+1}").start()
         response = None
         for attempt in range(3):
             try:
+                _system = (
+                    [{"type": "text", "text": SYSTEM_PROMPT,
+                      "cache_control": {"type": "ephemeral"}}]
+                    if PROMPT_CACHE else SYSTEM_PROMPT
+                )
                 response = client.messages.create(
                     model      = CLAUDE_MODEL,
-                    max_tokens = 4096,
-                    system     = SYSTEM_PROMPT,
+                    max_tokens = CLAUDE_MAX_TOKENS,
+                    system     = _system,
                     tools      = tools,
                     messages   = messages,
+                    thinking      = {"type": "adaptive"},
+                    output_config = {"effort": CLAUDE_EFFORT},
                 )
                 break
             except Exception as e:
@@ -1426,6 +1519,8 @@ def run_agent_claude(task: str):
             print("\033[31m  Rate limit persists after 3 retries. Try again in a few minutes.\033[0m")
             return
         spinner.stop()
+        if _pricing is not None:
+            _pricing.add(_usage_acc, getattr(response, "usage", None))
 
         # Collect text + tool_use blocks
         text_parts = []
@@ -1440,21 +1535,65 @@ def run_agent_claude(task: str):
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason != "tool_use" or not tool_uses:
-            # Final answer
-            elapsed = round(time.time() - start, 1)
             final_text = "\n".join(text_parts).strip()
+            trajectory.log_step(
+                step=iteration + 1,
+                task_type=router.task_type,
+                active_tools=(*router.active_names, "request_tool"),
+                tool_call=None,
+                observation_raw=final_text,
+                observation_truncated=truncate_observation(final_text),
+                event="assistant",
+            )
+            allowed, reason = _revrec_completion_status()
+            if not allowed and gate_nudges < 2:
+                gate_nudges += 1
+                messages.append({
+                    "role": "user",
+                    "content": "[HARNESS] " + reason + " Do not finish until verification_gate passes.",
+                })
+                continue
+            if not allowed:
+                print(f"\033[31m  Agent stopped without verification: {reason}\033[0m")
+                return
+            elapsed = round(time.time() - start, 1)
             print(f"\n\033[36m[{CLAUDE_MODEL}]\033[0m {final_text}")
             print(f"\n\033[90m  Done in {iteration+1} step(s), {elapsed}s\033[0m")
+            if _pricing is not None:
+                print(f"\033[90m  {_pricing.summarize(CLAUDE_MODEL, _usage_acc)}\033[0m")
             return
 
         # Execute each tool call
         tool_results = []
+        interventions = []
         for tu in tool_uses:
             args     = tu.input if isinstance(tu.input, dict) else {}
             args_str = ", ".join(f"{k}={repr(v)[:50]}" for k, v in args.items())
             print(f"  \033[33m{tu.name}\033[0m({args_str})")
 
-            result  = execute_tool(tu.name, args)
+            routed = router.handle_unavailable_call(tu.name, args)
+            if routed is None:
+                result = execute_tool(tu.name, args)
+                record = REVREC_TOOLS.records[-1] if REVREC_TOOLS.records else None
+                mutation_success = bool(
+                    record and record.ok and record.risk in {"write", "destructive"}
+                )
+            else:
+                result = routed
+                mutation_success = False
+            truncated = truncate_observation(result)
+            router.observe(truncated)
+            intervention = guard.record(tu.name, args, truncated, mutation_success)
+            if intervention:
+                interventions.append(intervention)
+            trajectory.log_step(
+                step=iteration + 1,
+                task_type=router.task_type,
+                active_tools=(*router.active_names, "request_tool"),
+                tool_call={"name": tu.name, "arguments": args},
+                observation_raw=result,
+                observation_truncated=truncated,
+            )
             preview = result[:100].replace("\n", " ")
             print(f"  \033[90m  {preview}{'...' if len(result) > 100 else ''}\033[0m")
             log_action(task, tu.name, args, result, model=CLAUDE_MODEL)
@@ -1462,13 +1601,19 @@ def run_agent_claude(task: str):
             tool_results.append({
                 "type":        "tool_result",
                 "tool_use_id": tu.id,
-                "content":     result,
+                "content":     truncated,
             })
+
+        if interventions:
+            tool_results.append({"type": "text", "text": "\n".join(interventions)})
 
         # Feed results back
         messages.append({"role": "user", "content": tool_results})
+        if guard.should_stop:
+            print("\033[31m  Agent stopped: repeated no-progress interventions exhausted the harness guard.\033[0m")
+            return
 
-    print(f"\033[33m  [Stopped at max {MAX_ITERS} steps]\033[0m")
+    print(f"\033[33m  [Stopped at adaptive max {max_steps} steps]\033[0m")
 
 
 # ---------------------------------------------------------------
@@ -1504,18 +1649,26 @@ class Spinner:
 # Agent loop
 # ---------------------------------------------------------------
 def run_agent(task: str, model: str = AGENT_MODEL):
+    router, guard, trajectory, max_steps = _start_revrec_harness(task, "revrec-ollama")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user",   "content": task},
     ]
-    print(f"\n\033[90m  model: {model} | max steps: {MAX_ITERS}\033[0m\n")
+    print(
+        f"\n\033[90m  model: {model} | tools: dynamic <={TOOL_VISIBILITY_BUDGET} "
+        f"of {len(REVREC_TOOLS.tools)} | complexity: {classify_complexity(task)} "
+        f"| max steps: {max_steps}\033[0m\n"
+    )
     start = time.time()
+    gate_nudges = 0
 
-    for iteration in range(MAX_ITERS):
+    for iteration in range(max_steps):
+        messages = process_history(messages, "ollama")
+        active_tools = router.schemas("ollama")
         payload = {
             "model":    model,
             "messages": messages,
-            "tools":    TOOLS,
+            "tools":    active_tools,
             "stream":   False,
         }
         spinner = Spinner(f"[{model}] step {iteration+1}").start()
@@ -1557,6 +1710,27 @@ def run_agent(task: str, model: str = AGENT_MODEL):
         content    = msg.get("content", "").strip()
 
         if not tool_calls:
+            trajectory.log_step(
+                step=iteration + 1,
+                task_type=router.task_type,
+                active_tools=(*router.active_names, "request_tool"),
+                tool_call=None,
+                observation_raw=content,
+                observation_truncated=truncate_observation(content),
+                event="assistant",
+            )
+            allowed, reason = _revrec_completion_status()
+            if not allowed and gate_nudges < 2:
+                gate_nudges += 1
+                messages.append({"role": "assistant", "content": content})
+                messages.append({
+                    "role": "user",
+                    "content": "[HARNESS] " + reason + " Do not finish until verification_gate passes.",
+                })
+                continue
+            if not allowed:
+                print(f"\033[31m  Agent stopped without verification: {reason}\033[0m")
+                return
             elapsed = round(time.time() - start, 1)
             print(f"\n\033[36m[{model}]\033[0m {content}")
             print(f"\n\033[90m  Done in {iteration + 1} step(s), {elapsed}s\033[0m")
@@ -1568,6 +1742,7 @@ def run_agent(task: str, model: str = AGENT_MODEL):
             "tool_calls": tool_calls,
         })
 
+        interventions = []
         for tc in tool_calls:
             fn_def = tc.get("function", {})
             name   = fn_def.get("name", "")
@@ -1581,14 +1756,41 @@ def run_agent(task: str, model: str = AGENT_MODEL):
             args_str = ", ".join(f"{k}={repr(v)[:50]}" for k, v in args.items())
             print(f"  \033[33m{name}\033[0m({args_str})")
 
-            result = execute_tool(name, args)
+            routed = router.handle_unavailable_call(name, args)
+            if routed is None:
+                result = execute_tool(name, args)
+                record = REVREC_TOOLS.records[-1] if REVREC_TOOLS.records else None
+                mutation_success = bool(
+                    record and record.ok and record.risk in {"write", "destructive"}
+                )
+            else:
+                result = routed
+                mutation_success = False
+            truncated = truncate_observation(result)
+            router.observe(truncated)
+            intervention = guard.record(name, args, truncated, mutation_success)
+            if intervention:
+                interventions.append(intervention)
+            trajectory.log_step(
+                step=iteration + 1,
+                task_type=router.task_type,
+                active_tools=(*router.active_names, "request_tool"),
+                tool_call={"name": name, "arguments": args},
+                observation_raw=result,
+                observation_truncated=truncated,
+            )
             preview = result[:100].replace("\n", " ")
             print(f"  \033[90m  {preview}{'...' if len(result) > 100 else ''}\033[0m")
             log_action(task, name, args, result, model=model)
 
-            messages.append({"role": "tool", "content": result})
+            messages.append({"role": "tool", "content": truncated})
+        if interventions:
+            messages.append({"role": "user", "content": "\n".join(interventions)})
+        if guard.should_stop:
+            print("\033[31m  Agent stopped: repeated no-progress interventions exhausted the harness guard.\033[0m")
+            return
 
-    print(f"\033[33m  [Stopped at max {MAX_ITERS} steps]\033[0m")
+    print(f"\033[33m  [Stopped at adaptive max {max_steps} steps]\033[0m")
 
 # ---------------------------------------------------------------
 # REPL
@@ -1634,7 +1836,7 @@ HELP_TEXT = """
 \033[1mOther commands:\033[0m
   tools        list all available tools
   outputs      list files created in this session
-  model <name> switch model (default: qwen3:14b)
+  model <name> switch model (default: qwen3.6:latest)
   help         show this message
   exit         quit
 
@@ -1676,15 +1878,21 @@ def _build_full_analysis_prompt(contract_paths: list[Path]) -> str:
 def main():
     print(BANNER)
     api_key   = os.environ.get("ANTHROPIC_API_KEY", "")
-    api_ready = bool(api_key)
+    local_only = os.environ.get("LOCAL_ONLY", "").strip() in ("1", "true", "yes")
+    # Under LOCAL_ONLY the cloud path is deactivated: never auto-upgrade to Claude.
+    api_ready = bool(api_key) and not local_only
     force_local = False   # set True with 'model local' command
 
     model = AGENT_MODEL
-    print(f"  Model    : \033[36m{model}\033[0m  (auto-upgrades to Claude for PDF/complex tasks)")
-    if api_ready:
-        print(f"  Claude API: \033[32mReady\033[0m  ({CLAUDE_MODEL})")
+    if local_only:
+        print(f"  Model    : \033[36m{model}\033[0m  (local-only — runs fully on-device)")
+        print(f"  Claude API: \033[33mOFF (local-only)\033[0m")
     else:
-        print(f"  Claude API: \033[33mNot set — PDF analysis will be slow on local models\033[0m")
+        print(f"  Model    : \033[36m{model}\033[0m  (auto-upgrades to Claude for PDF/complex tasks)")
+        if api_ready:
+            print(f"  Claude API: \033[32mReady\033[0m  ({CLAUDE_MODEL})")
+        else:
+            print(f"  Claude API: \033[33mNot set — PDF analysis will be slow on local models\033[0m")
     print(f"  Outputs  : {OUTPUT_DIR}")
     print(f"  KB       : \033[36mKPMG Revenue for Software & SaaS Handbook, Dec 2025\033[0m\n")
 

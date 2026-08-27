@@ -12,6 +12,7 @@ Commands:
   loaded             Show currently loaded files
   write <file>       Write last response's code block to a file
   route <prompt>     Preview routing without sending
+  paste              Capture a large multiline message
   models             List configured models
   apikey             Check Claude API key status
   help / exit
@@ -23,12 +24,14 @@ from pathlib import Path
 
 from core.models  import OllamaClient, ClaudeClient, ModelRouter
 from core.logger  import AuditLogger
+from core.web_intent import augment_with_web
 from core.ui      import (
     mode_banner, divider, Spinner,
     CYAN, YELLOW, GREEN, RED, DIM, BOLD, RESET, ok, warn, err, hi, lo
 )
-from core.config       import TEXT_EXTENSIONS, MAX_FILE_CHARS, MODELS, CLAUDE_MODEL
+from core.config       import TEXT_EXTENSIONS, MAX_FILE_CHARS, MODELS, CLAUDE_MODEL, LOCAL_ONLY
 from core.file_context import SESSION_CONTEXT
+from core.console_input import capture_summary, is_multiline_command, read_multiline_input
 from core.mode_memory  import ModeMemorySession
 
 
@@ -140,6 +143,15 @@ class WorkspaceState:
         return "\n".join(parts)
 
 
+def build_cowork_prompt(user_prompt: str, workspace_context: str = "", memory_prefix: str = "") -> str:
+    """Order durable memory, workspace evidence, and the user's request."""
+    if not memory_prefix and not workspace_context:
+        return user_prompt
+    parts = [part.strip() for part in (memory_prefix, workspace_context) if part and part.strip()]
+    parts.append(f"User: {user_prompt}")
+    return "\n\n".join(parts)
+
+
 # ─────────────────────────────────────────────────────────
 #  HELP
 # ─────────────────────────────────────────────────────────
@@ -158,6 +170,7 @@ HELP = f"""
   {YELLOW}apikey{RESET}              Check Claude API key status
 
 {BOLD}Console commands:{RESET}
+  {YELLOW}paste{RESET}               Capture multiline text; finish with ::end
   {YELLOW}help{RESET} / {YELLOW}exit{RESET}
 """
 
@@ -166,36 +179,27 @@ HELP = f"""
 #  MAIN
 # ─────────────────────────────────────────────────────────
 
-def build_cowork_prompt(user_prompt: str, workspace_context: str = "", memory_prefix: str = "") -> str:
-    parts = []
-    if memory_prefix:
-        parts.append(memory_prefix.strip())
-    if workspace_context:
-        parts.append(workspace_context.strip())
-    if parts:
-        parts.append(f"User: {user_prompt}")
-        return "\n\n".join(parts)
-    return user_prompt
-
-
 def run():
     """Entry point called by axio.py."""
     mode_banner("cowork", "File-aware workspace assistant  |  Smart model routing")
 
     ollama = OllamaClient()
     logger = AuditLogger("cowork")
-    memory = ModeMemorySession("cowork")
     ws     = WorkspaceState()
+    memory = ModeMemorySession("cowork")
 
     # Claude (optional)
     try:
-        claude    = ClaudeClient()
+        if LOCAL_ONLY:
+            raise RuntimeError("local-only")
+        claude = ClaudeClient()
         claude_ok = True
         print(f"  Ollama: {ok('ONLINE ✓')}    Claude API: {ok('READY ✓')}\n")
     except Exception:
         claude    = None
         claude_ok = False
-        print(f"  Ollama: {ok('ONLINE ✓')}    Claude API: {warn('OFFLINE')} {lo('(check .env)')}\n")
+        cloud_label = "OFF (local-only)" if LOCAL_ONLY else "OFFLINE"
+        print(f"  Ollama: {ok('ONLINE ✓')}    Claude API: {warn(cloud_label)}\n")
 
     print(f"  {lo('Type')} {YELLOW}help{RESET} {lo('for commands.  Type')} {YELLOW}exit{RESET} {lo('to quit.')}\n")
     logger.log_event("session_start")
@@ -215,16 +219,31 @@ def run():
         if not prompt:
             continue
 
-        lower = prompt.lower()
+        multiline = False
+        if is_multiline_command(prompt):
+            try:
+                prompt = read_multiline_input()
+            except ValueError as exc:
+                print(f"  {warn(str(exc))}\n")
+                continue
+            if not prompt.strip():
+                print(f"  {lo('Multiline input cancelled or empty.')}\n")
+                continue
+            multiline = True
+            print(f"  {ok(capture_summary(prompt))}\n")
 
-        if memory.handle_command(prompt):
-            continue
+        # Multiline content is always a user message, even if its first line
+        # happens to look like one of Cowork's console commands.
+        lower = "" if multiline else prompt.lower()
 
         # ── commands ──────────────────────────────────────────────
         if lower == "exit":
             memory.store(ollama_client=ollama)
             print(f"  {ok('Goodbye.')}\n")
             break
+
+        elif lower.startswith("memory") and memory.handle_command(lower):
+            continue
 
         elif lower == "help":
             print(HELP)
@@ -246,8 +265,6 @@ def run():
 
         elif lower.startswith("workspace "):
             print(f"  {ws.set(prompt[10:])}\n")
-            if ws.root:
-                memory.memory.update_facts({"workspace_paths": [str(ws.root)]})
             print(ws.list_files())
 
         elif lower == "ls":
@@ -306,10 +323,18 @@ def run():
         # ── model call ───────────────────────────────────────────
         else:
             route, picked = ModelRouter.detect(prompt)
-            context = ws.context_block()
-            memory_query = f"{prompt}\nWorkspace: {ws.root}" if ws.root else prompt
-            memory_prefix = memory.prefix(memory_query)
-            full_prompt = build_cowork_prompt(prompt, context, memory_prefix)
+            context       = ws.context_block()
+            # Web-augmentation: current-information questions get live, cited
+            # evidence folded into context (both backends; empty otherwise).
+            web_evidence  = augment_with_web(prompt)
+            if web_evidence:
+                context = (
+                    "Answer using the web evidence below and cite the source URLs. "
+                    "Do not answer from memory when evidence is present.\n\n"
+                    + web_evidence.strip() + "\n\n" + context
+                )
+            full_prompt = build_cowork_prompt(prompt, context, memory.prefix(prompt))
+            memory.record_user(prompt, metadata={"route": route, "workspace": str(ws.root or "")})
 
             print(f"  {lo(f'→ {route} | {picked}')}")
             divider()
@@ -343,19 +368,14 @@ def run():
             print()
 
             ws.last_response = result_text
+            memory.record_assistant(
+                result_text,
+                model=picked,
+                metadata={"route": route, "workspace": str(ws.root or "")},
+            )
             logger.log_turn(
                 prompt, result_text, picked,
                 route=route, elapsed=elapsed,
                 workspace=str(ws.root) if ws.root else None,
                 loaded_files=list(ws.loaded_files.keys()),
-            )
-            memory.record_turn(
-                prompt,
-                result_text,
-                model=picked,
-                metadata={
-                    "route": route,
-                    "workspace": str(ws.root) if ws.root else "",
-                    "loaded_files": ",".join(ws.loaded_files.keys()),
-                },
             )

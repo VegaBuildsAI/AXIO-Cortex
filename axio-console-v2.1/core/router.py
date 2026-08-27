@@ -10,7 +10,7 @@ Force Claude Sonnet for every prompt:
 
 import os as _os
 import re as _re
-from .config import ROUTE_KEYWORDS, MODELS, CLAUDE_MODEL
+from .config import ROUTE_KEYWORDS, MODELS, CLAUDE_MODEL, LOCAL_ONLY
 
 # Arithmetic expression detector: matches patterns like 2+2, 10*5, x^2, 3.14/7
 _ARITH_RE = _re.compile(r"\d[\s]*[+\-*/^][\s]*[\d(]|\b\d+\.?\d*\s*[+\-*/^]")
@@ -24,26 +24,34 @@ def detect(prompt: str) -> tuple[str, str]:
     Inspect a prompt and return (route_name, model_name).
 
     Routes (checked in order):
-      [override]  FORCE_CLAUDE=1  -> always premium (Claude Sonnet)
-      math        -> local reasoning model  [arithmetic regex]
-      premium     -> Claude API (PDF / legal / audit / complex tasks)
-      coding      -> local coding model (qwen3-coder)
-      revenue     -> local reasoning model (qwen3:14b)
-      chat        -> default chat model (mistral)
+      [override]  FORCE_CLAUDE=1  -> premium (Claude), UNLESS LOCAL_ONLY=1
+      math        -> local model (gemma4:12b) / python tool  [arithmetic regex]
+      premium     -> Claude tier (or local model when LOCAL_ONLY)
+      coding      -> Claude tier (or local model when LOCAL_ONLY)
+      revenue     -> Claude tier (or local model when LOCAL_ONLY)
+      chat        -> local chat model (gemma4:12b)
 
     Uses word-boundary matching for short single-word keywords to prevent
     false positives like 'api' matching inside 'capital'.
     """
+    # Hybrid: the agentic routes (coding / revenue / premium) boost to the active
+    # Claude tier; under LOCAL_ONLY they fall back to the local model so the whole
+    # platform stays on-device and never hands a claude-* tag to Ollama.
+    if LOCAL_ONLY:
+        _agentic = MODELS["reasoning"]
+    else:
+        from . import claude_runtime
+        _agentic = claude_runtime.get_model()
     ROUTE_TO_MODEL = {
-        "coding":  MODELS["coding"],
-        "revenue": MODELS["reasoning"],
-        "math":    MODELS["reasoning"],
-        "premium": CLAUDE_MODEL,
+        "coding":  _agentic,
+        "revenue": _agentic,
+        "math":    MODELS["reasoning"],   # exact math uses the local model / python tool
+        "premium": _agentic,
         "chat":    MODELS["chat"],
     }
 
-    # ── global override: FORCE_CLAUDE=1 ──────────────────────────────────
-    if FORCE_CLAUDE:
+    # ── global override: FORCE_CLAUDE=1 (ignored under LOCAL_ONLY) ────────
+    if FORCE_CLAUDE and not LOCAL_ONLY:
         return "premium", CLAUDE_MODEL
 
     p = prompt.lower()

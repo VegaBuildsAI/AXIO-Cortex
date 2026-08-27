@@ -4,7 +4,7 @@
 
 My name is Michael. I am building **AXIO**, a multi-model AI orchestration framework that I call **IOAF (Intelligent Orchestrated Agent Framework)**. The core idea is simple but profound: **AI systems should remember and learn from every interaction**. Today's AI tools are stateless — each session starts from zero. AXIO is designed to end that.
 
-AXIO runs entirely on my local machine (Windows, `C:\Users\AXIO\axio-console-v2.1\`) using Ollama-hosted open-source LLMs as the default backend, with the Anthropic Claude API available as a premium cloud layer. The system is consciously modeled after Anthropic's own product line — Claude Chat, Claude Code, and Claude Cowork — but running locally, under my control, with persistent memory that accumulates across every session.
+AXIO runs entirely on my local machine (Windows, `C:\Users\AXIO\AXIO Model Improvement\axio-console-v2.1\`) using Ollama-hosted open-source LLMs as the default backend, with the Anthropic Claude API available as a premium cloud layer. The system is consciously modeled after Anthropic's own product line — Claude Chat, Claude Code, and Claude Cowork — but running locally, under my control, with persistent memory that accumulates across every session.
 
 ---
 

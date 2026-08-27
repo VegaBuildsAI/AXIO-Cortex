@@ -1,7 +1,24 @@
 anthropic
 chromadb
+fastapi
 pgvector
 psycopg[binary]
 python-dotenv
+PyYAML
 requests
 rich
+uvicorn[standard]
+# Native Office/PDF artifacts plus RevRec Excel/PDF runtime.
+openpyxl
+python-docx
+python-pptx
+reportlab
+pdfplumber
+pypdf
+# Optional runtime for browser_open/browser_snapshot/browser_click.
+# After installation run: python -m playwright install chromium
+playwright
+# Dev/test runner. Tests are unittest-based; run with either
+#   python -m pytest tests
+#   python -m unittest discover -s tests
+pytest

@@ -28,12 +28,18 @@ class RaisingBackend:
 class PostgresFallbackTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.outbox_patch = patch(
+            "core.memory_durability.PENDING_DIR",
+            Path(self.tmp.name) / "outbox" / "pending",
+        )
+        self.outbox_patch.start()
         self.mem = MemoryManager("chat")
         self.mem._postgres_backend = RaisingBackend()
         self.mem._chroma = None
         self.mem._facts_path = Path(self.tmp.name) / "chat_memory.json"
 
     def tearDown(self):
+        self.outbox_patch.stop()
         self.tmp.cleanup()
 
     def test_get_facts_falls_back_to_defaults(self):

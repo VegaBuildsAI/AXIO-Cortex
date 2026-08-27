@@ -1,0 +1,21 @@
+dedup_threshold: 0.92
+contradiction_candidate_threshold: 0.58
+promote_after: 3
+compaction_trigger: 200
+compaction_target: 60
+compaction_similarity: 0.78
+decay_days: 45
+decay_step: 0.10
+min_confidence_keep: 0.35
+consolidate_every: 6
+reflect_every_hours: 168
+max_lessons_per_batch: 5
+max_promoted_principles: 30
+max_corrections: 30
+max_exemplars: 100
+max_contradiction_checks: 20
+message_batch_limit: 500
+resource_gate:
+  skip_on_battery: true
+  max_cpu_percent: 70
+  max_memory_percent: 85

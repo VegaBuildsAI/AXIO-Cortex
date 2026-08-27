@@ -6,6 +6,7 @@ Context pruning automatically trims old messages when the session grows too larg
 """
 
 import json
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -50,8 +51,15 @@ class SessionManager:
             session["messages"] = msgs[-CONTEXT_LIMIT:]
 
         path = self.dir / f"{session['name']}.json"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(session, f, indent=2, ensure_ascii=False)
+        pending = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with open(pending, "w", encoding="utf-8") as f:
+                json.dump(session, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            pending.replace(path)
+        finally:
+            pending.unlink(missing_ok=True)
 
     # ── load ─────────────────────────────────────────────
 

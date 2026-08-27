@@ -1,0 +1,11 @@
+{
+  "name": "axio-agent",
+  "files": {
+    "README.md": "# {{PROJECT_NAME}}\n\nAXIO-compatible local-first agent scaffold.\n",
+    "pyproject.toml": "[project]\nname = \"{{PROJECT_NAME}}\"\nversion = \"0.1.0\"\nrequires-python = \">=3.12\"\ndependencies = [\"requests\", \"pydantic\"]\n",
+    ".env.example": "OLLAMA_HOST=http://127.0.0.1:11434\nMODEL=gemma4:12b\n",
+    "src/{{PACKAGE_NAME}}/__init__.py": "",
+    "src/{{PACKAGE_NAME}}/agent.py": "from dataclasses import dataclass\n\n\n@dataclass\nclass AgentResult:\n    content: str\n    verified: bool = False\n\n\nclass LocalAgent:\n    def run(self, task: str) -> AgentResult:\n        raise NotImplementedError(\"Wire the approved AXIO model and tool registry\")\n",
+    "tests/test_agent.py": "import unittest\n\n\nclass AgentTests(unittest.TestCase):\n    def test_placeholder(self):\n        self.assertTrue(True)\n"
+  }
+}

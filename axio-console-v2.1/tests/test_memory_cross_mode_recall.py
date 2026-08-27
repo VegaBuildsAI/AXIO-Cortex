@@ -46,6 +46,21 @@ class CrossModeKeywordRecallTests(unittest.TestCase):
         texts = " ".join(h["text"] for h in hits)
         self.assertNotIn("AXIO Cortex migration", texts)
 
+    def test_structured_facts_are_replaced_atomically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with patch("core.memory.MEMORY_DIR", tmp_path):
+                mem = self._make_manager("chat", tmp_path)
+                mem.update_facts({"notes": ["persistent"]})
+
+                saved = json.loads(
+                    (tmp_path / "chat_memory.json").read_text(encoding="utf-8")
+                )
+                pending = list(tmp_path.glob("*.tmp"))
+
+        self.assertEqual(saved["notes"], ["persistent"])
+        self.assertEqual(pending, [])
+
 
 if __name__ == "__main__":
     unittest.main()

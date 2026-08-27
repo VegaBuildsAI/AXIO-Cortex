@@ -1,0 +1,10 @@
+{
+  "name": "python-cli",
+  "files": {
+    "README.md": "# {{PROJECT_NAME}}\n\nGenerated from the AXIO python-cli template.\n",
+    "pyproject.toml": "[build-system]\nrequires = [\"setuptools>=68\"]\nbuild-backend = \"setuptools.build_meta\"\n\n[project]\nname = \"{{PROJECT_NAME}}\"\nversion = \"0.1.0\"\nrequires-python = \">=3.12\"\n\n[project.scripts]\n{{PACKAGE_NAME}} = \"{{PACKAGE_NAME}}.__main__:main\"\n",
+    "src/{{PACKAGE_NAME}}/__init__.py": "\"\"\"{{PROJECT_NAME}} package.\"\"\"\n",
+    "src/{{PACKAGE_NAME}}/__main__.py": "def main() -> None:\n    print(\"{{PROJECT_NAME}} ready\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    "tests/test_cli.py": "import unittest\n\n\nclass CliTests(unittest.TestCase):\n    def test_placeholder(self):\n        self.assertTrue(True)\n"
+  }
+}

@@ -2,10 +2,10 @@
 AXIO Core -- Memory Manager
 Three-tier memory system for all AXIO modes.
 
-  Tier 1  Short-term   : Session JSON (existing, handled by SessionManager)
-  Tier 2  Medium-term  : ChromaDB RAG -- searchable past sessions per mode
-  Tier 3  Long-term    : Structured JSON facts -- preferences, key entities,
-                         project context, deal history (per mode + console master)
+  Tier 1  Short-term   : crash-safe local journals + Postgres sessions/messages
+  Tier 2  Medium-term  : Postgres/pgvector primary + Chroma semantic mirror
+  Tier 3  Long-term    : Postgres facts + atomic JSON mirror, with a global
+                         console profile and mode-specific context
 
 Usage (any mode):
     from core.memory import MemoryManager, _handle_memory_cmd
@@ -20,11 +20,24 @@ Modes: "chat", "code", "cowork", "revrec", "console"
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from .memory_durability import (
+    acknowledge,
+    atomic_write_json,
+    dead_letter,
+    enqueue,
+    pending_count,
+    pending_events,
+    record_attempt,
+    save_session_snapshot,
+    MAX_REPLAY_ATTEMPTS,
+)
 
 # ---------------------------------------------------------------------------
 #  Config imports
@@ -37,11 +50,11 @@ try:
     )
 except ImportError:
     MEMORY_DIR            = Path.home() / ".axio" / "memory"
-    CHROMA_DIR            = Path.home() / ".axio" / "chroma"
+    CHROMA_DIR            = Path.home() / ".axio" / "chroma-resilient"
     OLLAMA_HOST           = "http://127.0.0.1:11434"
     MEMORY_RECALL_RESULTS = 5
     MEMORY_SUMMARIZE      = True
-    MEMORY_SUMMARY_MODEL  = "qwen3:14b"
+    MEMORY_SUMMARY_MODEL  = "gemma4:12b"
     AXIO_MEMORY_BACKEND   = "json"
 
 # ---------------------------------------------------------------------------
@@ -89,6 +102,24 @@ def _warn_pg_fallback(exc: Exception):
             f"falling back to local JSON/keyword memory."
         )
 
+
+def _is_transient(exc: Exception) -> bool:
+    """True if a replay failure is worth retrying (DB unreachable), False if
+    it is a permanent 'poison' event (bad payload / constraint violation) that
+    would wedge the queue forever if we kept retrying it head-of-line."""
+    if isinstance(exc, ValueError):
+        return False  # e.g. wrong-dimension embedding -- never succeeds
+    try:
+        import psycopg
+        if isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
+            return True  # connection lost -- retry next cycle
+        if isinstance(exc, psycopg.Error):
+            return False  # IntegrityError / DataError / ProgrammingError -- permanent
+    except ImportError:
+        pass
+    # Unknown error: treat as transient so a fluke never discards real data.
+    return True
+
 # ---------------------------------------------------------------------------
 #  Default structured-fact schema per mode
 # ---------------------------------------------------------------------------
@@ -132,8 +163,10 @@ _DEFAULT_FACTS = {
         "last_session":        "",
     },
     "console": {
+        "global_profile":      {},
         "all_modes_summary":   {},
         "global_preferences":  {},
+        "learned_principles":  [],
         "cross_mode_entities": [],
         "training_stats":      {"total_sessions": 0, "total_turns": 0},
         "notes":               [],
@@ -218,7 +251,16 @@ class MemoryManager:
         """Load structured facts for any mode without a full MemoryManager."""
         if mode == self.mode:
             return self.get_facts()
-        base = dict(_DEFAULT_FACTS.get(mode, {}))
+        base = copy.deepcopy(_DEFAULT_FACTS.get(mode, {}))
+        if self._postgres_backend:
+            try:
+                from core.memory_backends.postgres_backend import PostgresMemoryBackend
+                base.update(PostgresMemoryBackend(mode).get_facts())
+                path = MEMORY_DIR / f"{mode}_memory.json"
+                atomic_write_json(path, base)
+                return base
+            except Exception as exc:
+                _warn_pg_fallback(exc)
         path = MEMORY_DIR / f"{mode}_memory.json"
         if path.exists():
             try:
@@ -235,8 +277,9 @@ class MemoryManager:
     def get_facts(self) -> dict:
         if self._postgres_backend:
             try:
-                base = dict(_DEFAULT_FACTS.get(self.mode, {}))
+                base = copy.deepcopy(_DEFAULT_FACTS.get(self.mode, {}))
                 base.update(self._postgres_backend.get_facts())
+                atomic_write_json(self._facts_path, base)
                 return base
             except Exception as exc:
                 _warn_pg_fallback(exc)
@@ -244,33 +287,14 @@ class MemoryManager:
             try:
                 with open(self._facts_path, encoding="utf-8") as f:
                     data = json.load(f)
-                base = dict(_DEFAULT_FACTS.get(self.mode, {}))
+                base = copy.deepcopy(_DEFAULT_FACTS.get(self.mode, {}))
                 base.update(data)
                 return base
             except Exception:
                 pass
-        return dict(_DEFAULT_FACTS.get(self.mode, {}))
+        return copy.deepcopy(_DEFAULT_FACTS.get(self.mode, {}))
 
     def update_facts(self, patch: dict, source_session_id: str = None):
-        if self._postgres_backend:
-            try:
-                facts = self.get_facts()
-                for key, value in patch.items():
-                    if isinstance(value, list) and isinstance(facts.get(key), list):
-                        existing = facts[key]
-                        for item in value:
-                            if item not in existing:
-                                existing.append(item)
-                        facts[key] = existing
-                    elif isinstance(value, dict) and isinstance(facts.get(key), dict):
-                        facts[key].update(value)
-                    else:
-                        facts[key] = value
-                facts["last_session"] = datetime.now().isoformat()
-                self._postgres_backend.update_facts(facts, source_session_id=source_session_id)
-                return
-            except Exception as exc:
-                _warn_pg_fallback(exc)
         facts = self.get_facts()
         for key, value in patch.items():
             if isinstance(value, list) and isinstance(facts.get(key), list):
@@ -284,8 +308,22 @@ class MemoryManager:
             else:
                 facts[key] = value
         facts["last_session"] = datetime.now().isoformat()
-        with open(self._facts_path, "w", encoding="utf-8") as f:
-            json.dump(facts, f, indent=2, ensure_ascii=False)
+        atomic_write_json(self._facts_path, facts)
+
+        if self._postgres_backend:
+            event_id = enqueue(
+                "facts",
+                self.mode,
+                {"facts": facts, "source_session_id": source_session_id},
+            )
+            try:
+                self._postgres_backend.update_facts(
+                    facts,
+                    source_session_id=source_session_id,
+                )
+                acknowledge(event_id)
+            except Exception as exc:
+                _warn_pg_fallback(exc)
 
     def auto_update_facts(self, prompt: str, response: str):
         """Extract lightweight facts from a completed turn without LLM calls."""
@@ -363,49 +401,294 @@ class MemoryManager:
             pass
         return None
 
-    def store_chunk(self, text: str, metadata: dict = None):
-        if self._postgres_backend:
-            try:
-                meta = {"mode": self.mode, "ts": datetime.now().isoformat()}
-                if metadata:
-                    meta.update({k: str(v) for k, v in metadata.items()})
-                embedding = self._embed_via_ollama(text)
-                if not embedding:
-                    return
-                self._postgres_backend.store_chunk(text, embedding, meta)
-            except Exception as exc:
-                _warn_pg_fallback(exc)
-            return
-        if not self._chroma:
-            return
-        chunk_id  = str(uuid.uuid4())
-        meta      = {"mode": self.mode, "ts": datetime.now().isoformat()}
-        if metadata:
-            meta.update({k: str(v) for k, v in metadata.items()})
-        embedding = self._embed_via_ollama(text)
-        if not embedding:
-            # Never fall back to ChromaDB's built-in ONNX downloader
+    def _local_chunk_id(self, text: str, metadata: dict) -> str:
+        identity = "|".join(
+            str(metadata.get(key, ""))
+            for key in ("source_type", "doc", "path", "title", "session_name")
+        )
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"axio:{self.mode}:{identity}:{text}"))
+
+    def _store_local_chunk(
+        self,
+        text: str,
+        embedding: list[float] | None,
+        metadata: dict,
+        chunk_id: str,
+    ) -> None:
+        self._store_local_chunk_for_mode(
+            self.mode, text, embedding, metadata, chunk_id
+        )
+
+    def _store_local_chunk_for_mode(
+        self,
+        mode: str,
+        text: str,
+        embedding: list[float] | None,
+        metadata: dict,
+        chunk_id: str,
+    ) -> None:
+        collection = self._chroma_collection(mode)
+        if not collection or not embedding:
             return
         try:
-            self._chroma.add(
+            collection.upsert(
                 ids=[chunk_id],
                 documents=[text],
-                metadatas=[meta],
+                metadatas=[self._chroma_safe_metadata(metadata)],
                 embeddings=[embedding],
             )
         except Exception:
             pass
 
+    @staticmethod
+    def _chroma_safe_metadata(metadata: dict) -> dict:
+        """Keep rich JSON in Postgres while giving Chroma scalar metadata."""
+        safe = {}
+        for key, value in (metadata or {}).items():
+            if isinstance(value, (str, int, float, bool)):
+                safe[key] = value
+            elif value is None:
+                safe[key] = ""
+            else:
+                safe[key] = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return safe
+
+    @staticmethod
+    def _embedding_list(value):
+        if value is None:
+            return None
+        if hasattr(value, "to_list"):
+            return value.to_list()
+        return list(value)
+
+    def reconcile_pending(self) -> int:
+        """Replay durable local events into Postgres, idempotently."""
+        if not self._postgres_backend:
+            return 0
+        try:
+            from core.memory_backends.postgres_backend import PostgresMemoryBackend
+        except ImportError:
+            return 0
+
+        # Replay session-creating events (live_session/session_finalize) before
+        # facts, so a `facts` row never hits a foreign-key violation against a
+        # `sessions` row that is still queued behind it. sort() is stable, so
+        # the mtime order from pending_events() is preserved within each tier.
+        _op_priority = {
+            "live_session": 0,
+            "session_finalize": 0,
+            "chunk": 1,
+            "chunk_metadata": 1,
+            "delete": 1,
+            "facts": 2,
+        }
+        events = pending_events()
+        events.sort(key=lambda e: _op_priority.get(e.get("operation"), 1))
+
+        replayed = 0
+        for event in events:
+            payload = event.get("payload") or {}
+            operation = event.get("operation")
+            try:
+                backend = PostgresMemoryBackend(str(event.get("mode", self.mode)))
+                if operation == "facts":
+                    backend.update_facts(
+                        payload.get("facts", {}),
+                        source_session_id=payload.get("source_session_id"),
+                    )
+                elif operation == "chunk":
+                    embedding = payload.get("embedding")
+                    if not embedding:
+                        embedding = self._embed_via_ollama(payload.get("text", ""))
+                    if not embedding:
+                        continue
+                    backend.store_chunk(
+                        payload.get("text", ""),
+                        embedding,
+                        payload.get("metadata", {}),
+                        chunk_id=payload.get("chunk_id"),
+                    )
+                elif operation == "chunk_metadata":
+                    row = backend.update_chunk_metadata(
+                        payload.get("chunk_id", ""),
+                        payload.get("metadata", {}),
+                    )
+                    if row:
+                        self._store_local_chunk_for_mode(
+                            str(event.get("mode", self.mode)),
+                            row.get("content", ""),
+                            self._embedding_list(row.get("embedding")),
+                            row.get("metadata", {}),
+                            str(row.get("id") or payload.get("chunk_id", "")),
+                        )
+                elif operation == "live_session":
+                    backend.persist_live_session(payload.get("session", {}))
+                elif operation == "session_finalize":
+                    backend.persist_session(
+                        payload.get("session", {}),
+                        payload.get("summary", ""),
+                        payload.get("embedding"),
+                    )
+                elif operation == "delete":
+                    backend.delete_chunks(
+                        payload.get("source_type", ""),
+                        payload.get("key", ""),
+                        payload.get("value", ""),
+                    )
+                else:
+                    acknowledge(str(event.get("event_id", "")))
+                    continue
+                acknowledge(str(event.get("event_id", "")))
+                replayed += 1
+            except Exception as exc:
+                if _is_transient(exc):
+                    # Postgres is unreachable -- stop the pass and retry the
+                    # whole queue next cycle (do NOT count this against the event).
+                    _warn_pg_fallback(exc)
+                    break
+                # Permanent 'poison' event: isolate it so it can't wedge the
+                # queue head-of-line. Dead-letter after repeated failures.
+                attempts = record_attempt(event, exc)
+                if attempts >= MAX_REPLAY_ATTEMPTS:
+                    dead_letter(event)
+                    print(
+                        f"  [AXIO memory] dead-lettered poison event "
+                        f"{event.get('event_id')} after {attempts} attempt(s): {exc}"
+                    )
+                else:
+                    _warn_pg_fallback(exc)
+                continue
+        return replayed
+
+    def persist_live_session(self, session: dict) -> None:
+        """Durably mirror raw messages after every user/assistant event."""
+        save_session_snapshot(session)
+        if not self._postgres_backend:
+            return
+        event_id = enqueue(
+            "live_session",
+            self.mode,
+            {"session": session},
+        )
+        try:
+            self._postgres_backend.persist_live_session(session)
+            acknowledge(event_id)
+            self.reconcile_pending()
+        except Exception as exc:
+            _warn_pg_fallback(exc)
+
+    def embed_text(self, text: str):
+        """Public local-only embedding helper for memory maintenance jobs."""
+        return self._embed_via_ollama(text)
+
+    def store_chunk(
+        self,
+        text: str,
+        metadata: dict = None,
+        embedding: list[float] = None,
+        chunk_id: str = None,
+        require_primary: bool = False,
+    ) -> str:
+        meta      = {"mode": self.mode, "ts": datetime.now().isoformat()}
+        if metadata:
+            meta.update(metadata)
+        embedding = embedding or self._embed_via_ollama(text)
+        chunk_id = chunk_id or self._local_chunk_id(text, meta)
+        self._store_local_chunk(text, embedding, meta, chunk_id)
+
+        if not self._postgres_backend:
+            if require_primary:
+                raise RuntimeError("Postgres primary is not active")
+            return chunk_id
+        event_id = enqueue(
+            "chunk",
+            self.mode,
+            {
+                "chunk_id": chunk_id,
+                "text": text,
+                "embedding": embedding,
+                "metadata": meta,
+            },
+            event_id=chunk_id,
+        )
+        if not embedding:
+            if require_primary:
+                raise RuntimeError("Local embedding unavailable; primary write not attempted")
+            return chunk_id
+        try:
+            self._postgres_backend.store_chunk(
+                text,
+                embedding,
+                meta,
+                chunk_id=chunk_id,
+            )
+            acknowledge(event_id)
+        except Exception as exc:
+            _warn_pg_fallback(exc)
+            if require_primary:
+                raise
+        return chunk_id
+
+    def update_chunk_metadata(self, chunk_id: str, metadata: dict) -> None:
+        """Durably update one chunk and refresh its Chroma mirror."""
+        if not self._postgres_backend:
+            return
+        event_id = enqueue(
+            "chunk_metadata",
+            self.mode,
+            {"chunk_id": chunk_id, "metadata": metadata},
+        )
+        try:
+            row = self._postgres_backend.update_chunk_metadata(chunk_id, metadata)
+            if row:
+                self._store_local_chunk(
+                    row.get("content", ""),
+                    self._embedding_list(row.get("embedding")),
+                    row.get("metadata", metadata),
+                    str(row.get("id") or chunk_id),
+                )
+            acknowledge(event_id)
+        except Exception as exc:
+            _warn_pg_fallback(exc)
+
+    def delete_chunks(self, source_type: str, key: str, value: str) -> None:
+        if self._postgres_backend:
+            # Enqueue a durable delete first, so an outage during the DELETE is
+            # replayed by reconcile_pending() rather than leaving a stale chunk.
+            event_id = enqueue(
+                "delete",
+                self.mode,
+                {"source_type": source_type, "key": key, "value": value},
+            )
+            try:
+                self._postgres_backend.delete_chunks(source_type, key, value)
+                acknowledge(event_id)
+            except Exception as exc:
+                _warn_pg_fallback(exc)
+        if self._chroma:
+            try:
+                self._chroma.delete(
+                    where={
+                        "$and": [
+                            {"mode": {"$eq": self.mode}},
+                            {"source_type": {"$eq": source_type}},
+                            {key: {"$eq": value}},
+                        ]
+                    }
+                )
+            except Exception:
+                pass
+
     def recall(self, query: str, n_results: int = None, allowed_modes: list[str] = None):
         n = n_results or MEMORY_RECALL_RESULTS
         if self._postgres_backend:
             try:
+                self.reconcile_pending()
                 embedding = self._embed_via_ollama(query)
                 if embedding:
                     return self._postgres_backend.recall(embedding, n, modes=allowed_modes)
             except Exception as exc:
                 _warn_pg_fallback(exc)
-            return self._keyword_fallback(query, allowed_modes)
         if self._chroma:
             try:
                 embedding = self._embed_via_ollama(query)
@@ -431,6 +714,8 @@ class MemoryManager:
                         metas = results.get("metadatas",  [[]])[0]
                         dists = results.get("distances",  [[]])[0]
                         for d, mt, dist in zip(docs, metas, dists):
+                            if (mt or {}).get("superseded_by"):
+                                continue
                             merged.append({"text": d, "metadata": mt, "distance": dist})
                     if merged:
                         merged.sort(key=lambda x: x["distance"])
@@ -525,33 +810,48 @@ class MemoryManager:
     def store_session(self, session: dict, ollama_client=None):
         if not session.get("messages"):
             return
+        save_session_snapshot(session)
         summary = self._summarize_session(session, ollama_client)
         if not summary:
             return
 
-        session_id = None
+        raw_session_id = str(session.get("id") or uuid.uuid4())
+        try:
+            session_id = str(uuid.UUID(raw_session_id))
+        except ValueError:
+            session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"axio:session:{raw_session_id}"))
+        session["id"] = session_id
+        summary_meta = {
+            "source_type": "session_summary",
+            "session_name": session.get("name", ""),
+            "mode": session.get("mode", self.mode),
+            "model": session.get("model", ""),
+            "message_count": str(len(session.get("messages", []))),
+            "created": session.get("created", ""),
+        }
+        embedding = self._embed_via_ollama(summary)
+        summary_id = str(uuid.uuid5(uuid.UUID(session_id), "summary"))
+        self._store_local_chunk(summary, embedding, summary_meta, summary_id)
+
         if self._postgres_backend:
-            # Postgres is the system of record: persist the full session
-            # (Tier 1) + messages + summary embedding (Tier 2) in one place,
-            # and link the facts written below back to it.
+            event_id = enqueue(
+                "session_finalize",
+                self.mode,
+                {
+                    "session": session,
+                    "summary": summary,
+                    "embedding": embedding,
+                },
+                event_id=summary_id,
+            )
             try:
-                embedding = self._embed_via_ollama(summary)
                 session_id = self._postgres_backend.persist_session(
                     session, summary, embedding,
                 )
+                acknowledge(event_id)
+                self.reconcile_pending()
             except Exception as exc:
                 _warn_pg_fallback(exc)
-        else:
-            self.store_chunk(
-                text=summary,
-                metadata={
-                    "session_name":  session.get("name", ""),
-                    "mode":          session.get("mode", self.mode),
-                    "model":         session.get("model", ""),
-                    "message_count": str(len(session.get("messages", []))),
-                    "created":       session.get("created", ""),
-                },
-            )
 
         self.update_facts(
             {
@@ -586,14 +886,23 @@ class MemoryManager:
     def build_memory_prefix(self, query: str = "", allowed_modes: list[str] = None) -> str:
         parts = []
         facts = self.get_facts()
+        console_facts = self._facts_for_mode("console") if self.mode != "revrec" else {}
+        global_profile = console_facts.get("global_profile", {})
         fact_lines = []
 
-        if facts.get("user_name"):
-            fact_lines.append(f"User name: {facts['user_name']}")
-        if facts.get("preferred_language"):
-            fact_lines.append(f"Preferred language: {facts['preferred_language']}")
-        if facts.get("preferred_tone"):
-            fact_lines.append(f"Preferred tone: {facts['preferred_tone']}")
+        user_name = global_profile.get("user_name") or facts.get("user_name")
+        preferred_language = (
+            global_profile.get("preferred_language") or facts.get("preferred_language")
+        )
+        preferred_tone = global_profile.get("preferred_tone") or facts.get("preferred_tone")
+        key_projects = global_profile.get("key_projects") or facts.get("key_projects")
+
+        if user_name:
+            fact_lines.append(f"User name: {user_name}")
+        if preferred_language:
+            fact_lines.append(f"Preferred language: {preferred_language}")
+        if preferred_tone:
+            fact_lines.append(f"Preferred tone: {preferred_tone}")
         if facts.get("primary_language"):
             fact_lines.append(f"Primary coding language: {facts['primary_language']}")
         if facts.get("tech_stack"):
@@ -602,8 +911,20 @@ class MemoryManager:
             fact_lines.append(f"Active projects: {', '.join(str(p) for p in facts['active_projects'][:3])}")
         if facts.get("known_clients"):
             fact_lines.append(f"Known clients: {', '.join(str(c) for c in facts['known_clients'][:5])}")
-        if facts.get("key_projects"):
-            fact_lines.append(f"Key projects: {', '.join(str(p) for p in facts['key_projects'][:3])}")
+        if key_projects:
+            fact_lines.append(f"Key projects: {', '.join(str(p) for p in key_projects[:5])}")
+        if console_facts.get("global_preferences"):
+            preferences = console_facts["global_preferences"]
+            fact_lines.append(
+                "Global preferences: "
+                + ", ".join(f"{key}={value}" for key, value in preferences.items())
+            )
+        if console_facts.get("learned_principles"):
+            principles = console_facts["learned_principles"]
+            fact_lines.append(
+                "Learned principles:\n  - "
+                + "\n  - ".join(str(item) for item in principles[:10])
+            )
         if facts.get("notes"):
             recent_notes = facts["notes"][-3:]
             fact_lines.append("Recent memory notes:\n  - " + "\n  - ".join(recent_notes))
@@ -621,8 +942,8 @@ class MemoryManager:
                 recall_texts = [r["text"] for r in recalls if r.get("text")]
                 if recall_texts:
                     parts.append(
-                        "=== RELEVANT PAST SESSIONS ===\n"
-                        + "\n---\n".join(recall_texts[:3])
+                        "=== RELEVANT MEMORY ===\n"
+                        + "\n---\n".join(recall_texts[:MEMORY_RECALL_RESULTS])
                     )
 
         if not parts:
@@ -652,6 +973,9 @@ class MemoryManager:
                     "chroma_ok":    False,
                     "chroma_docs":  backend_stats.get("embedding_count", 0),
                     "last_session": facts.get("last_session", "never"),
+                    "primary":      "postgres",
+                    "local_mirror": str(MEMORY_DIR.parent),
+                    "pending_events": pending_count(),
                     **backend_stats,
                 }
             except Exception as exc:
@@ -672,7 +996,18 @@ class MemoryManager:
             "chroma_ok":    chroma_ok,
             "chroma_docs":  chroma_count,
             "last_session": facts.get("last_session", "never"),
+            "primary":      "local",
+            "local_mirror": str(MEMORY_DIR.parent),
+            "pending_events": pending_count(),
         }
+
+    def source_counts(self) -> list[dict]:
+        if self._postgres_backend:
+            try:
+                return self._postgres_backend.source_counts()
+            except Exception as exc:
+                _warn_pg_fallback(exc)
+        return []
 
 
 # ===========================================================================
