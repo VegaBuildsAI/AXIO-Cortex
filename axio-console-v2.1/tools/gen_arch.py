@@ -71,7 +71,7 @@ SLATE = "#475569"
 # ---------- header ----------
 P.append(f'<rect x="0" y="0" width="{W}" height="{H}" fill="#f1f5f9"/>')
 P.append(f'<text x="{W/2}" y="52" text-anchor="middle" font-family="Inter,sans-serif" font-size="30" font-weight="800" fill="#0f172a">AXIO Platform &#8212; IOAF Architecture</text>')
-P.append(f'<text x="{W/2}" y="80" text-anchor="middle" font-family="Inter,sans-serif" font-size="14" fill="#64748b">v2.1 Final Debugged Release &#183; reconstructed from FigJam sources &#183; local-first multi-model orchestration</text>')
+P.append(f'<text x="{W/2}" y="80" text-anchor="middle" font-family="Inter,sans-serif" font-size="14" fill="#64748b">v2.1 Continuous Resilient Cortex Memory &#183; Postgres-Cortex + gemma4:12b / Claude &#183; local-first multi-model orchestration</text>')
 
 # =========================================================
 # BAND 1 - Four-Mode Platform Workflow
@@ -85,10 +85,10 @@ arrow(220, b1y + 185, 265, b1y + 185)
 arrow(330, b1y + 231, 330, b1y + 300, "yes", dash=True)
 elbow(330, b1y + 335, 480, b1y + 185, "no", midx=410)
 modes = [
-    ("Chat Mode", "modes/chat.py", "Claude Haiku 4.5 / mistral:latest", CRIM, CRIM_S),
-    ("Code Mode", "modes/code.py", "Sonnet 4.6 / qwen3-coder:30b - File+PowerShell", PURP, PURP_S),
-    ("Cowork Mode", "modes/cowork.py", "Sonnet 4.6 / Auto-routed local", TEAL, TEAL_S),
-    ("RevRec Mode", "modes/revrec.py - rev_agent.py", "Sonnet 4.6 / qwen3:14b - ASC 606 + Excel", AMBER, AMBER_S),
+    ("Chat Mode", "modes/chat.py", "gemma4:12b local + web-augment / Claude Haiku", CRIM, CRIM_S),
+    ("Code Mode", "modes/code.py", "Claude Sonnet 4.6 (Opus avail) - 42-tool harness", PURP, PURP_S),
+    ("Cowork Mode", "modes/cowork.py", "gemma4:12b local + web-augment / Claude boost", TEAL, TEAL_S),
+    ("RevRec Mode", "modes/revrec.py - rev_agent.py", "gemma4:12b / Claude - ASC 606 (isolated mem)", AMBER, AMBER_S),
 ]
 mx = 500; mw = 330; mh = 92; gap = 20; my0 = b1y + 70
 for i, (t, f, dd, c, s) in enumerate(modes):
@@ -98,8 +98,8 @@ for i in range(4):
     yy = my0 + i * (mh + gap) + mh / 2
     elbow(480, b1y + 185, mx, yy, midx=478, col=SLATE)
 tx = 900
-box(tx, b1y + 70, 250, 80, ["IOAF MemoryManager", "core/memory.py", "shared across all 4 modes"], NAVY, NAVY_S)
-tiers = [("Tier 3 - Facts JSON", PURP, PURP_S), ("Tier 2 - ChromaDB RAG", TEAL, TEAL_S), ("Tier 1 - Session JSON", INDIGO, INDIGO_S)]
+box(tx, b1y + 70, 250, 80, ["AXIO Cortex - MemoryManager", "core/memory.py", "chat/cowork/code shared; revrec isolated"], NAVY, NAVY_S, sub_fs=11)
+tiers = [("Tier 3 - Facts (PG + JSON)", PURP, PURP_S), ("Tier 2 - pgvector + Chroma", TEAL, TEAL_S), ("Tier 1 - Sessions + journals", INDIGO, INDIGO_S)]
 for i, (t, c, s) in enumerate(tiers):
     box(tx, b1y + 180 + i * 70, 250, 56, [t], c, s, fs=14)
 for i in range(4):
@@ -117,10 +117,10 @@ band(b2y, b2h, "2 - IOAF Three-Tier Memory System  (session lifecycle)", PURP)
 rowy = b2y + 110
 box(70, rowy, 150, 64, ["User Message"], NAVY, NAVY_S)
 box(300, rowy, 175, 64, ["MemoryManager", "core/memory.py"], NAVY, NAVY_S)
-box(560, rowy - 70, 230, 70, ["Tier 3 Read", "Structured Facts JSON", "~/.axio/memory/*_memory.json"], PURP, PURP_S, sub_fs=11)
-box(560, rowy + 70, 230, 70, ["Tier 2 Read", "ChromaDB Vector Store", "Semantic Recall - Top-N"], TEAL, TEAL_S, sub_fs=11)
+box(560, rowy - 70, 230, 70, ["Tier 3 Read", "Facts: Postgres + JSON mirror", "console.global_profile injected"], PURP, PURP_S, sub_fs=11)
+box(560, rowy + 70, 230, 70, ["Tier 2 Read", "pgvector cosine Top-N", "(Chroma / keyword fallback)"], TEAL, TEAL_S, sub_fs=11)
 box(870, rowy, 200, 64, ["System Prompt", "Memory Prefix Injected"], INDIGO, INDIGO_S)
-box(1150, rowy, 190, 64, ["Model Call", "Ollama / Claude API"], CRIM, CRIM_S)
+box(1150, rowy, 190, 64, ["Model Call", "gemma4:12b / Claude API"], CRIM, CRIM_S)
 box(1420, rowy, 150, 64, ["Response"], GREEN, GREEN_S)
 arrow(220, rowy + 32, 300, rowy + 32)
 elbow(475, rowy + 32, 560, rowy - 35, midx=520, col=SLATE)
@@ -130,20 +130,20 @@ elbow(790, rowy + 105, 870, rowy + 32, midx=835, col=SLATE)
 arrow(1070, rowy + 32, 1150, rowy + 32)
 arrow(1340, rowy + 32, 1420, rowy + 32)
 wy = b2y + 340
-P.append(f'<text x="60" y="{wy-14}" font-family="Inter,sans-serif" font-size="14" font-weight="700" fill="#7c2d12">On Session /exit  -&gt;  persist all tiers</text>')
-box(70, wy, 150, 64, ["Session /exit"], NAVY, NAVY_S)
-box(300, wy, 200, 76, ["Tier 1 Write", "Raw JSON", "~/.axio/sessions/*.json"], INDIGO, INDIGO_S, sub_fs=11)
-box(300, wy + 110, 230, 76, ["Tier 3 Write", "auto_update_facts()", "chat/code/console_memory.json"], PURP, PURP_S, sub_fs=11)
-box(580, wy, 180, 70, ["qwen3:14b", "Summarize session"], CRIM, CRIM_S)
+P.append(f'<text x="60" y="{wy-14}" font-family="Inter,sans-serif" font-size="14" font-weight="700" fill="#7c2d12">Persist before inference + on exit  -&gt;  all tiers (crash-safe)</text>')
+box(70, wy, 150, 64, ["record / exit"], NAVY, NAVY_S)
+box(300, wy, 200, 76, ["Tier 1 Write", "journals + Postgres", "~/.axio/journals + sessions"], INDIGO, INDIGO_S, sub_fs=11)
+box(300, wy + 110, 230, 76, ["Tier 3 Write", "auto_update_facts()", "Postgres + JSON mirror"], PURP, PURP_S, sub_fs=11)
+box(580, wy, 180, 70, ["gemma4:12b", "Summarize session"], CRIM, CRIM_S)
 box(810, wy, 200, 70, ["nomic-embed-text", "Embed summary - 768-dim"], TEAL, TEAL_S, sub_fs=11)
-box(1060, wy, 220, 76, ["Tier 2 Write", "ChromaDB PersistentClient", "~/.axio/chroma/ vector collection"], TEAL_S, "#134e4a", sub_fs=11)
+box(1060, wy, 220, 76, ["Tier 2 Write", "pgvector + Chroma mirror", "durable outbox -> replay"], TEAL_S, "#134e4a", sub_fs=11)
 arrow(220, wy + 32, 300, wy + 32)
 elbow(220, wy + 32, 300, wy + 148, midx=260, col=SLATE)
 arrow(500, wy + 35, 580, wy + 35)
 arrow(760, wy + 35, 810, wy + 35)
 arrow(1010, wy + 35, 1060, wy + 35)
 ly = b2y + 580
-for i, (t, c) in enumerate([("Tier 1 - Raw session JSON (short-term source)", INDIGO), ("Tier 2 - ChromaDB semantic vector recall", TEAL), ("Tier 3 - Structured key-value facts (always loaded)", PURP)]):
+for i, (t, c) in enumerate([("Tier 1 - Sessions + crash-safe journals", INDIGO), ("Tier 2 - pgvector primary + Chroma mirror", TEAL), ("Tier 3 - Structured facts + global_profile (always loaded)", PURP)]):
     P.append(f'<rect x="{80+i*500}" y="{ly}" width="16" height="16" rx="4" fill="{c}"/>')
     P.append(f'<text x="{102+i*500}" y="{ly+13}" font-family="Inter,sans-serif" font-size="12.5" fill="#334155">{esc(t)}</text>')
 
@@ -156,11 +156,11 @@ box(70, b3y + 300, 150, 70, ["User Prompt"], NAVY, NAVY_S)
 box(290, b3y + 296, 200, 78, ["core/router.py", "Keyword + Regex", "route detection"], NAVY, NAVY_S, sub_fs=11)
 arrow(220, b3y + 335, 290, b3y + 335)
 routes = [
-    ("engine/math_tool.py", "python_exact - score=100", GREEN, GREEN_S, "route = math"),
-    ("qwen3-coder:30b", "Coding / Agentic", PURP, PURP_S, "route = coding_agent"),
-    ("qwen3:14b", "ASC 606 / Revenue", AMBER, AMBER_S, "route = revenue_analysis"),
-    ("qwen3:8b", "Fast Reasoning", TEAL, TEAL_S, "route = quick_chat"),
-    ("Claude Sonnet 4.6", "Anthropic API", INDIGO, INDIGO_S, "route = premium_reasoning / FORCE_CLAUDE=1"),
+    ("engine/math_tool.py", "python exact - score 100", GREEN, GREEN_S, "route = exact_math"),
+    ("Claude Sonnet 4.6 / Opus", "Code - 42-tool agent", PURP, PURP_S, "route = coding_agent"),
+    ("Claude Opus 4.8", "ASC 606 / Revenue", AMBER, AMBER_S, "route = revenue_analysis"),
+    ("gemma4:12b", "Chat / Cowork / quick", TEAL, TEAL_S, "route = quick_chat"),
+    ("Claude Opus 4.8", "Premium reasoning", INDIGO, INDIGO_S, "route = premium / FORCE_CLAUDE=1"),
 ]
 rx0 = 620; rw = 300; rh = 72; rgap = 18; ry0 = b3y + 70
 for i, (t, dd, c, s, lab) in enumerate(routes):
@@ -176,9 +176,9 @@ for i in range(5):
     elbow(rx0 + rw, yy, 1010, b3y + 338, midx=975, col=SLATE)
 fy = ry0 + 5 * (rh + rgap) + 10
 P.append(f'<text x="{rx0}" y="{fy+4}" font-family="Inter,sans-serif" font-size="13" font-weight="700" fill="#7c2d12">Fallback / escalation chain</text>')
-fbs = [("Fallback: qwen3:8b", "API error / timeout", CRIM, CRIM_S),
-       ("Fallback: Claude Sonnet 4.6", "Timeout on MATH / ARCH", INDIGO, INDIGO_S),
-       ("Escalate: Claude Haiku 4.5", "Low confidence", AMBER, AMBER_S)]
+fbs = [("LOCAL_ONLY=1 / no API key", "all routes -> gemma4:12b", CRIM, CRIM_S),
+       ("Claude Sonnet <-> Opus", "in-app model + effort switch", INDIGO, INDIGO_S),
+       ("Local fallback: gemma4:12b", "on Claude error / timeout", AMBER, AMBER_S)]
 for i, (t, dd, c, s) in enumerate(fbs):
     box(rx0 + i * 330, fy + 14, 300, 66, [t, dd], c, s)
 
