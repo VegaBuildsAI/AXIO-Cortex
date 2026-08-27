@@ -27,7 +27,7 @@
 
 ## Doc currency map (don't trust the stale ones)
 - **Current:** `CLAUDE.md`, `AGENTS.md`, `docs/STATE.md`, `docs/CORTEX.md`, `CLAUDE_CODE_CORTEX_MEMORY_AUDIT_HANDOFF.md`, `CODEX_SELF_MEMORY_HANDOFF.md`; seeds `AXIO_CORTEX_MEMORY.md`, `AXIO_AI_WORKFLOW.md`.
-- **Stale/superseded:** `docs/ARCHITECTURE.md` (ChromaDB era), `CHANGES.md`, `FIXES_SUMMARY.md`, `IMPROVEMENTS.md`, `UI_README.md` (model drift), `AXIO_GEMMA_PLAN.md` (self-labeled superseded).
+- **Stale/superseded:** `CHANGES.md`, `FIXES_SUMMARY.md`, `IMPROVEMENTS.md`, `UI_README.md` (model drift), `AXIO_GEMMA_PLAN.md` (self-labeled superseded). (`docs/ARCHITECTURE.md` is now current — diagram + prose reflect the Postgres-Cortex + gemma4/Claude reality.)
 
 <!-- AUTO-SNAPSHOT:BEGIN -->
 ### Snapshot (auto)

@@ -5,7 +5,7 @@
 ## How to work in this repo (read-first protocol)
 - This file + the imported `docs/STATE.md` (live state) and `docs/CORTEX.md` (memory subsystem) are your context. **Do not scan the whole tree.** For anything not covered, `Grep`/`Read` the specific file or ask.
 - **Single source of truth for constants is `core/config.py`** — never hardcode model names, paths, or limits elsewhere.
-- Canonical code lives in `core/`, `core/code_tools/`, `modes/`, `config/`, `prompts/`, `skills/axio-coding/`. **Ignore** for context: marketing/manifesto docs (`AXIO_IOAF_Manifesto*`, `AXIO_LinkedIn_*`, `*.jam`), superseded plans (`AXIO_GEMMA_PLAN.md`), and May-era docs (`CHANGES.md`, `FIXES_SUMMARY.md`, `IMPROVEMENTS.md`, `docs/ARCHITECTURE.md`).
+- Canonical code lives in `core/`, `core/code_tools/`, `modes/`, `config/`, `prompts/`, `skills/axio-coding/`. **Ignore** for context: marketing/manifesto docs (`AXIO_IOAF_Manifesto*`, `AXIO_LinkedIn_*`, `*.jam`), superseded plans (`AXIO_GEMMA_PLAN.md`), and May-era docs (`CHANGES.md`, `FIXES_SUMMARY.md`, `IMPROVEMENTS.md`).
 - **Knowledge sources (consult every session):** primary = this file, `AGENTS.md`, `docs/STATE.md`, `docs/CORTEX.md`. Secondary (always available) = the **Obsidian Second Brain via MCP** — `mcp__second-brain__*` (`search_files`, `read_file`, `directory_tree`, `read_multiple_files`) over `C:\Users\AXIO\Documents\Second Brain`. Search it for people, past decisions, architecture rationale, and cross-project context before scanning code.
 
 ## What AXIO is
@@ -46,7 +46,7 @@ In-mode: `plan <task>` / `execute` (Code) · `model <sonnet|opus> [effort]` · `
 `ANTHROPIC_API_KEY` (req) · `CLAUDE_MODEL=claude-sonnet-4-6` · `CLAUDE_MODEL_CHAT=claude-haiku-4-5-20251001` · `CLAUDE_MAX_TOKENS=16000` · `CLAUDE_EFFORT=high` · `LOCAL_ONLY` · `OLLAMA_HOST=127.0.0.1:11434` · `MODEL_*` (all default `gemma4:12b`) · `MEMORY_SUMMARY_MODEL=gemma4:12b` · `MEMORY_EMBED_MODEL=nomic-embed-text:latest` (768-dim, **do not change**) · `AXIO_MEMORY_BACKEND` (default `json`; `postgres` for live Cortex) · `AXIO_DB_*` (axio_cortex@127.0.0.1:5432) · `AXIO_SEARXNG_URL=127.0.0.1:8080`.
 
 ## Do NOT
-- Hardcode constants outside `core/config.py`; edit `rev_agent.py`'s system prompt; remove `modes/gemma_code.py` (shim used by `tests/test_coding_skills.py`); change `MEMORY_EMBED_MODEL` (breaks the 768-dim vector store); trust `docs/ARCHITECTURE.md` / May-era docs for current state.
+- Hardcode constants outside `core/config.py`; edit `rev_agent.py`'s system prompt; remove `modes/gemma_code.py` (shim used by `tests/test_coding_skills.py`); change `MEMORY_EMBED_MODEL` (breaks the 768-dim vector store); trust May-era docs (`CHANGES.md`, `FIXES_SUMMARY.md`, `IMPROVEMENTS.md`) for current state.
 
 ## Current state & memory subsystem
 Live status, in-flight work, and recent changes → **`docs/STATE.md`**. AXIO Cortex memory internals → **`docs/CORTEX.md`**.
