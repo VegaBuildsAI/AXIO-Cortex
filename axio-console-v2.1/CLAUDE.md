@@ -16,7 +16,7 @@ A local-first, multi-model AI orchestration platform on **Windows** — Michael'
 |------|---------------------------|---------------|---------|
 | Chat | local Ollama | `gemma4:12b` (Claude path uses `claude-haiku-4-5`) | Conversation w/ session memory + web-augmentation |
 | Cowork | local Ollama (premium routes → Claude) | `gemma4:12b` | File-aware workspace assistant + web-augmentation |
-| Code | **Claude API** | `claude-sonnet-4-6` (effort `high`) | Unified 38-tool coding agent: Plan Mode, skills, retrieval, web-evidence gate, GitHub PR workflow, scaffolds, verification gate |
+| Code | **Claude API** | `claude-sonnet-4-6` (effort `high`) | Unified 42-tool coding agent: Plan Mode, skills, retrieval, web-evidence gate, GitHub PR workflow, artifact generation (docx/xlsx/pptx/pdf), scaffolds, verification gate |
 | RevRec | local + boost | `gemma4:12b`, PDF/complex → Claude | ASC 606 / IFRS 15 revenue-recognition specialist (isolated memory) |
 
 Claude tiers (`CLAUDE_MODELS`): `sonnet`=claude-sonnet-4-6 (default), `opus`=claude-opus-4-8. In-app: `model opus max`, `effort xhigh`. `LOCAL_ONLY=1` = 100% on-device (Code uses the local fallback).
@@ -25,7 +25,7 @@ Claude tiers (`CLAUDE_MODELS`): `sonnet`=claude-sonnet-4-6 (default), `opus`=cla
 - **`axio.py`** — launcher / mode selector (chat · cowork · code · revrec).
 - **`core/config.py`** — all constants, paths, models, env, routing. **Source of truth.**
 - **`core/models.py`** — `OllamaClient`, `ClaudeClient`, `ModelRouter`.
-- **`core/code_tools/`** — the **38-tool** Code registry (`build_default_registry()` in `__init__.py`; count = `len(CODE_TOOL_REGISTRY.tools)`). Groups: filesystem, python, node, git, **github**, document, shell, verification_gate, web, browser, retrieval, scaffold. Approval gate + risk levels in `registry.py`.
+- **`core/code_tools/`** — the **42-tool** Code registry (`build_default_registry()` in `__init__.py`; count = `len(CODE_TOOL_REGISTRY.tools)`), categorized, with a full/dynamic tool router (`CODE_TOOL_ROUTING_MODE`, `router.py`) that controls tool visibility. Groups: filesystem, python, node, git, **github**, document, **artifact (create_docx/xlsx/pptx/pdf)**, shell, verification_gate, web, browser, retrieval, scaffold. Approval gate + risk levels in `registry.py`.
 - **`core/web_intent.py`** — web-evidence gate (detect current-info intent; block Code `TASK_COMPLETE` until a web tool succeeds) + `augment_with_web()` used by Chat/Cowork.
 - **`core/` memory (AXIO Cortex)** — `memory.py`, `self_memory.py`, `memory_runtime.py`, `mode_memory.py`, `memory_durability.py`, `memory_consolidation.py`, `db.py`, `memory_backends/postgres_backend.py`. **See `docs/CORTEX.md`.**
 - **`modes/`** — `chat.py`, `cowork.py`, `code.py` (real Code logic; `gemma_code.py` is a 10-line shim → `code.py`), `revrec.py`.

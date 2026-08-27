@@ -6,7 +6,8 @@
 
 ## Recently done (this line of work)
 - **Web-evidence gate** — `core/web_intent.py` (intent detection + `augment_with_web`); wired into Code via `_completion_gate()` in `modes/code.py`; Chat/Cowork now do web-augmentation before answering current-info questions.
-- **GitHub toolset** — `core/code_tools/github_tools.py` (branch/commit/push/fork/PR via `gh` CLI + git); registry now **38 tools**; push/fork/PR-create/merge are `external` (approval-gated).
+- **GitHub toolset** — `core/code_tools/github_tools.py` (branch/commit/push/fork/PR via `gh` CLI + git); push/fork/PR-create/merge are `external` (approval-gated).
+- Registry is **42 tools** (categorized, with a full/dynamic tool router `CODE_TOOL_ROUTING_MODE`): the GitHub toolset plus Codex's artifact tools (`create_docx/xlsx/pptx/pdf`). Docs/tests reconciled to 42.
 - **Skill curation** — 8 new `skills/axio-coding/references/*.md` (filesystem, git, web, browser, retrieval, scaffold, verification-and-recovery, github-workflow) + tool→reference index in `SKILL.md`.
 - **Consolidation** — canonical root is `C:\Users\AXIO\AXIO Model Improvement\axio-console-v2.1`; the old `C:\Users\AXIO\axio-console` line is archived (`axio-console_ARCHIVED_gemma-line`). Docs corrected to the Root 3 path and 38-tool count.
 

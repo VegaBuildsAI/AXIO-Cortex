@@ -74,7 +74,7 @@ tools:
     after: Base any requested follow-up on observed PR state.
   git_branch:
     when: Create or switch a local branch as explicitly required by the coding workflow.
-    rules: [Inspect git_status first, Preserve uncommitted work, Use the required codex branch prefix when applicable]
+    rules: [Inspect git_status first, Preserve uncommitted work, Use a descriptive branch name that follows the repository's conventions]
     after: Verify the active branch before further mutations.
   git_commit:
     when: Commit only scoped, verified changes after the user requested a commit.

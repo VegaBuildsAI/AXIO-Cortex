@@ -17,7 +17,7 @@ Local-first, multi-model AI orchestration platform on **Windows** — a local mi
 
 ## Essentials
 - **`core/config.py`** = single source of truth for constants, models, paths, routing. Never hardcode elsewhere.
-- Code mode = the unified **38-tool** agent (`core/code_tools/`, count = `len(CODE_TOOL_REGISTRY.tools)`): filesystem, python, node, git, github, document, shell, verification_gate, web, browser, retrieval, scaffold. Risk-gated in `registry.py`.
+- Code mode = the unified **42-tool** agent (`core/code_tools/`, count = `len(CODE_TOOL_REGISTRY.tools)`; categorized, full/dynamic tool router via `CODE_TOOL_ROUTING_MODE`): filesystem, python, node, git, github, document, artifact (docx/xlsx/pptx/pdf), shell, verification_gate, web, browser, retrieval, scaffold. Risk-gated in `registry.py`.
 - Memory = **AXIO Cortex** (Postgres/pgvector primary + Chroma mirror + JSON fallback; default backend `json`). Full detail in `docs/CORTEX.md`.
 - Skills: `skills/axio-coding/SKILL.md` + `references/*.md`, loaded by `core/coding_skills.py`.
 
