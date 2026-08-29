@@ -39,6 +39,7 @@ from core.logger import AuditLogger
 from core.mode_memory import ModeMemorySession
 from core.models import ClaudeClient, OllamaClient
 from core.ui import BOLD, CYAN, RESET, YELLOW, Spinner, err, lo, mode_banner, ok, warn
+from harness.planner import run_orchestrated
 
 
 # One registry is the source of truth for both backends and every local-model alias.
@@ -577,6 +578,7 @@ HELP = f"""
   {YELLOW}paste{RESET}              Capture a large multiline task; finish with ::end
   {YELLOW}plan <task>{RESET}        Generate a read-only plan and approve it
   {YELLOW}execute{RESET}            Execute the last approved plan
+  {YELLOW}agents <task>{RESET}      Multi-agent orchestrator: plan → specialist agents → synthesis
   {YELLOW}vision <path>{RESET}      Attach a local image to Ollama context
 
 {BOLD}Inspection:{RESET}
@@ -599,7 +601,7 @@ HELP = f"""
 
 
 def run(force_claude_session: bool = False) -> None:
-    mode_banner("code", f"Unified coding agent  |  {len(TOOLS)} tools  |  Plan Mode  |  verification gate")
+    mode_banner("code", f"Unified coding agent  |  {len(TOOLS)} tools  |  Plan Mode  |  agents  |  verification gate")
     ollama = OllamaClient()
     logger = AuditLogger("code")
     memory = ModeMemorySession("code")
@@ -674,6 +676,33 @@ def run(force_claude_session: bool = False) -> None:
             continue
         if command == "skills":
             print(f"\n{format_skill_catalog()}\n")
+            continue
+        if command == "agents" or command.startswith("agents "):
+            agent_task = task.split(maxsplit=1)[1].strip() if " " in task else ""
+            if not agent_task:
+                print(f"  {warn('Usage: agents <task>  — plan the task and run the specialist agent fleet')}\n")
+                continue
+            provider = "ollama" if LOCAL_ONLY else "claude"
+            active_model = model if LOCAL_ONLY else claude_runtime.get_model()
+            file_context = SESSION_CONTEXT.inject("", mode="list").strip() if SESSION_CONTEXT.count else ""
+            scoped = build_code_task(agent_task, file_context, "")
+            CODE_TOOLS.start_task(agent_task, _active_workspace_roots())
+            audit = lambda tool, targs, out: logger.log_tool(agent_task, tool.name, targs, out, active_model)
+            memory.record_user(agent_task, metadata={"mode": "agents", "backend": provider})
+            print(f"  {lo('Multi-agent orchestrator — plan, dispatch, peer-delegate, synthesize.')}")
+            try:
+                summary = run_orchestrated(
+                    scoped, provider=provider,
+                    model=(model if LOCAL_ONLY else None),
+                    ollama=ollama, claude=claude,
+                    approve=_approve_tool, audit=audit,
+                    memory_prefix=memory.prefix(agent_task),
+                )
+            except Exception as exc:
+                print(f"  {err(f'Orchestrator error: {exc}')}\n")
+                continue
+            print(f"\n{summary}\n")
+            memory.record_assistant(summary, model=active_model, metadata={"mode": "agents"})
             continue
         context_handled, context_result = handle_context_command(command, task)
         if context_handled:

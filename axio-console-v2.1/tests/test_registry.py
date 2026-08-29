@@ -44,7 +44,10 @@ def test_dispatcher_schemas_scoped_per_agent():
     assert "run_command" not in fs
     assert "read_file" in fs
     run = {t["function"]["name"] for t in dispatcher.tool_schemas_for(get("RunAgent"))}
-    assert run == {"run_command"}            # only its one live tool today
+    # Over the 42-tool registry RunAgent's live execute tools are run_command and
+    # run_python; it still may not touch filesystem/web tools.
+    assert run == {"run_command", "run_python"}
+    assert "read_file" not in run and "web_search" not in run
 
 
 def test_peer_map_guard():

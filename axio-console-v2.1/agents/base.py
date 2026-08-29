@@ -24,27 +24,47 @@ from dataclasses import dataclass, field
 # ── Risk levels ──────────────────────────────────────────────────────────────
 LOW, MEDIUM, HIGH = "LOW", "MEDIUM", "HIGH"
 
-# ── Concrete tools implemented today (source of truth: modes/code.py) ────────
-IMPLEMENTED_TOOLS: frozenset[str] = frozenset({
+# ── Concrete tools implemented today (source of truth: core.code_tools) ──────
+# Derived live from the 42-tool CodeToolRegistry so the agent live sets grow
+# automatically as the registry does — no spec edits needed. Falls back to the
+# original nine if the registry can't be imported (keeps `agents`/`harness`
+# importable in a bare test environment, as the dispatcher docstring promises).
+_FALLBACK_IMPLEMENTED: frozenset[str] = frozenset({
     "read_file", "write_file", "edit_file", "list_dir",
     "create_dir", "delete_file", "search_files", "grep_files", "run_command",
 })
 
-# Map a plan/logical tool name onto the concrete tool that fulfils it today.
-# Identity entries are omitted; only true aliases are listed.
+
+def _load_implemented_tools() -> frozenset[str]:
+    try:
+        from core.code_tools import CODE_TOOL_REGISTRY
+        names = frozenset(tool.name for tool in CODE_TOOL_REGISTRY.tools)
+        return names or _FALLBACK_IMPLEMENTED
+    except Exception:
+        return _FALLBACK_IMPLEMENTED
+
+
+IMPLEMENTED_TOOLS: frozenset[str] = _load_implemented_tools()
+
+# Map a plan/logical tool name onto the concrete registry tool that fulfils it.
+# Identity entries are omitted; only true aliases are listed. Aliases whose
+# target is not in IMPLEMENTED_TOOLS simply resolve to no live tool.
 #
 # NB: `bash` is deliberately NOT aliased to run_command. The plan gives most
 # agents *scoped* bash (file-ops / git-only / test-only allowlists) and only
 # RunAgent unrestricted bash. Until that per-agent allowlist enforcement exists,
 # mapping bash -> run_command would hand every bash-holding agent unrestricted
 # execution and collapse the isolation guarantee. So bash resolves to no live
-# tool for now; agents still reach the shell through the explicit run_command
-# tool where their spec grants it (RunAgent only today).
+# tool; agents still reach the shell through the explicit run_command tool where
+# their spec grants it.
 TOOL_ALIASES: dict[str, str] = {
     "grep_search":    "grep_files",
     "find_files":     "search_files",
-    "run_python":     "run_command",
-    "run_powershell": "run_command",
+    "run_powershell": "run_command",   # no dedicated PowerShell tool in the registry
+    "run_tests":      "run_command",   # tests run via the shell tool (pytest/npm/…)
+    "extract_content": "web_extract",
+    "screenshot_url":  "browser_snapshot",
+    "git_push":        "github_push",
 }
 
 

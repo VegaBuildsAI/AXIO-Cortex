@@ -69,16 +69,23 @@ def run_tool_loop(
     audit: AuditFn | None = None,
     max_steps: int = 6,
     verbose: bool = True,
+    extra_schemas: Sequence[dict] = (),
+    special_handlers: dict | None = None,
 ) -> str:
     """Run a bounded tool-calling loop and return the model's final text.
 
     `messages` is mutated in place with the assistant/tool turns so the caller
     can persist the full exchange if desired. `provider` is "ollama" or "claude".
+
+    `extra_schemas`/`special_handlers` let a caller add non-registry tools whose
+    calls are serviced by a Python handler `(args) -> str` instead of the
+    registry — used by the agent runtime for peer delegation.
     """
     provider = provider.strip().lower()
     tools = resolve_tools(tool_names)
-    allowed = {tool.name for tool in tools}
-    schemas = CODE_TOOL_REGISTRY.emit_subset(tools, provider)
+    handlers = special_handlers or {}
+    allowed = {tool.name for tool in tools} | set(handlers)
+    schemas = CODE_TOOL_REGISTRY.emit_subset(tools, provider) + list(extra_schemas)
     if approve is None:
         approve = interactive_approver
 
@@ -93,7 +100,10 @@ def run_tool_loop(
             args = {}
         if verbose:
             print(f"  {name}({summarize_arguments(args, limit=50)})")
-        out = _execute(name, args, allowed, approve, audit)
+        if name in handlers:
+            out = handlers[name](args)
+        else:
+            out = _execute(name, args, allowed, approve, audit)
         if verbose:
             preview = out[:100].replace("\n", " ")
             print(f"    {preview}{'...' if len(out) > 100 else ''}")
