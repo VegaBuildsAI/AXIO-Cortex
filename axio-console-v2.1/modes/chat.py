@@ -28,6 +28,19 @@ from core.web_intent   import augment_with_web
 from core.console_input import capture_summary, is_multiline_command, read_multiline_input
 from core.config       import MODELS, LOCAL_ONLY
 from core.mode_memory  import ModeMemorySession
+from core.code_tools   import CODE_TOOL_REGISTRY
+from core.code_tools.tool_loop import run_tool_loop
+from core.code_tools.profiles  import CHAT_TOOLS
+from pathlib import Path
+
+# Chat is a conversation first: keep the tool budget small so a plain reply
+# still returns in a single round when no tool is needed.
+CHAT_TOOL_STEPS = 4
+CHAT_SYSTEM = (
+    "You are AXIO Chat, a helpful assistant. You can read and write files, "
+    "create Word/Excel/PowerPoint/PDF documents, and search, fetch, and browse "
+    "the web. Use a tool only when it genuinely helps; otherwise just answer."
+)
 from core.ui           import (
     mode_banner, status_line, divider,
     CYAN, YELLOW, GREEN, RED, PURPLE, DIM, BOLD, RESET, ok, warn, err, hi, lo
@@ -283,23 +296,47 @@ def run(initial_model: str = "", initial_session: str = None):
 
             divider()
             response = ""
+            # Tools draw from the chat profile of the 42-tool registry; the
+            # registry's own risk/approval gate still guards every call. Scope
+            # the workspace to cwd so in-directory writes don't prompt.
+            CODE_TOOL_REGISTRY.start_task(prompt, [Path.cwd()])
+            audit = lambda tool, targs, out: logger.log_tool(prompt, tool.name, targs, out, cur_model)
 
             if cur_backend == "claude":
                 if not claude_ok:
                     print(f"  {err('Claude not available.')}\n")
                     continue
-                print(f"\n  {PURPLE}[Claude]{RESET} ", end="", flush=True)
-                response = claude.chat(messages, print_output=True)
+                print(f"\n  {PURPLE}[Claude]{RESET}")
+                try:
+                    response = run_tool_loop(
+                        tool_names=CHAT_TOOLS, provider="claude",
+                        messages=list(messages), claude=claude,
+                        system=CHAT_SYSTEM, audit=audit, max_steps=CHAT_TOOL_STEPS,
+                    )
+                    print(f"  {response}")
+                except Exception as e:
+                    print(f"\n  {err(f'Error: {e}')}\n")
+                    continue
             else:
                 if not ollama.is_running():
                     print(f"  {err('Ollama is offline. Run: ollama serve')}\n")
                     continue
-                print(f"\n  {CYAN}[{cur_model}]{RESET} ", end="", flush=True)
+                print(f"\n  {CYAN}[{cur_model}]{RESET}")
                 try:
-                    response = ollama.chat_stream(cur_model, messages)
-                except Exception as e:
-                    print(f"\n  {err(f'Error: {e}')}\n")
-                    continue
+                    response = run_tool_loop(
+                        tool_names=CHAT_TOOLS, provider="ollama",
+                        messages=list(messages), ollama=ollama, model=cur_model,
+                        audit=audit, max_steps=CHAT_TOOL_STEPS,
+                    )
+                    print(f"  {response}")
+                except Exception:
+                    # Model may not support tool-calling — fall back to plain streaming chat.
+                    print(f"  {lo('(tools unavailable for this model — plain chat)')}")
+                    try:
+                        response = ollama.chat_stream(cur_model, messages)
+                    except Exception as e:
+                        print(f"\n  {err(f'Error: {e}')}\n")
+                        continue
 
             divider()
             print()

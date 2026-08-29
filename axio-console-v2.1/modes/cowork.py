@@ -33,6 +33,19 @@ from core.config       import TEXT_EXTENSIONS, MAX_FILE_CHARS, MODELS, CLAUDE_MO
 from core.file_context import SESSION_CONTEXT
 from core.console_input import capture_summary, is_multiline_command, read_multiline_input
 from core.mode_memory  import ModeMemorySession
+from core.code_tools   import CODE_TOOL_REGISTRY
+from core.code_tools.tool_loop import run_tool_loop
+from core.code_tools.profiles  import COWORK_TOOLS
+
+# Cowork is a robust workspace assistant: a larger tool budget than Chat, but
+# still bounded. The registry's approval gate guards execute/destructive tools.
+COWORK_TOOL_STEPS = 8
+COWORK_SYSTEM = (
+    "You are AXIO Cowork, a file-aware workspace assistant. You can read, edit, "
+    "and create files; run and inspect Python/Node; search and index the "
+    "workspace; read documents; use the web; and read git state. Prefer editing "
+    "files in the active workspace. Use tools when they help; otherwise answer."
+)
 
 
 # ─────────────────────────────────────────────────────────
@@ -341,28 +354,47 @@ def run():
 
             result_text = ""
             elapsed     = 0.0
+            # Scope tool writes to the workspace (and cwd) so in-project writes
+            # don't prompt; the registry gates execute/destructive tools regardless.
+            roots = [Path.cwd()] + ([ws.root] if ws.root else [])
+            CODE_TOOL_REGISTRY.start_task(prompt, roots)
+            audit = lambda tool, targs, out: logger.log_tool(prompt, tool.name, targs, out, picked)
 
             if route == "premium" and claude_ok:
                 # Use Claude API for complex / PDF tasks
-                print(f"\n  {CYAN}[claude-sonnet]{RESET} ", end="", flush=True)
+                print(f"\n  {CYAN}[claude-sonnet]{RESET}")
                 try:
-                    result_text = claude.chat_stream_raw(
-                        [{"role": "user", "content": full_prompt}],
-                        system="You are AXIO Cowork, an expert file-aware coding assistant.",
+                    result_text = run_tool_loop(
+                        tool_names=COWORK_TOOLS, provider="claude",
+                        messages=[{"role": "user", "content": full_prompt}],
+                        claude=claude, system=COWORK_SYSTEM,
+                        audit=audit, max_steps=COWORK_TOOL_STEPS,
                     )
+                    print(f"  {result_text}")
                 except Exception as e:
                     print(f"\n  {err(f'Claude error: {e}')}\n")
                     continue
             else:
-                # Use Ollama (generate endpoint for workspace-aware prompts)
+                # Use Ollama with tools; fall back to plain generate if unsupported.
                 if not ollama.is_running():
                     print(f"  {err('Ollama offline. Run: ollama serve')}\n")
                     continue
+                print(f"\n  {CYAN}[{picked}]{RESET}")
                 try:
-                    result_text, elapsed = ollama.generate_stream(picked, full_prompt)
-                except Exception as e:
-                    print(f"  {err(f'Error: {e}')}\n")
-                    continue
+                    result_text = run_tool_loop(
+                        tool_names=COWORK_TOOLS, provider="ollama",
+                        messages=[{"role": "user", "content": full_prompt}],
+                        ollama=ollama, model=picked,
+                        audit=audit, max_steps=COWORK_TOOL_STEPS,
+                    )
+                    print(f"  {result_text}")
+                except Exception:
+                    print(f"  {lo('(tools unavailable for this model — plain generation)')}")
+                    try:
+                        result_text, elapsed = ollama.generate_stream(picked, full_prompt)
+                    except Exception as e:
+                        print(f"  {err(f'Error: {e}')}\n")
+                        continue
 
             divider()
             print()
