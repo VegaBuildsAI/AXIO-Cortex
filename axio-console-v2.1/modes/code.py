@@ -698,6 +698,9 @@ def run(force_claude_session: bool = False) -> None:
                     approve=_approve_tool, audit=audit,
                     memory_prefix=memory.prefix(agent_task),
                 )
+            except KeyboardInterrupt:
+                print(f"\n  {warn('Orchestration interrupted — back at the CODE prompt.')}\n")
+                continue
             except Exception as exc:
                 print(f"  {err(f'Orchestrator error: {exc}')}\n")
                 continue
@@ -779,17 +782,22 @@ def run(force_claude_session: bool = False) -> None:
         active_model = model if LOCAL_ONLY else claude_runtime.get_model()
         metadata = {"backend": "ollama" if LOCAL_ONLY else "claude", "workspace_files": SESSION_CONTEXT.count}
         memory.record_user(user_task, metadata=metadata)
-        if LOCAL_ONLY:
-            result = _run_ollama_agent(
-                final_task,
-                model,
-                ollama,
-                logger,
-                image_messages=images,
-                task_scope=user_task,
-            )
-        else:
-            result = _run_claude_agent(final_task, claude, logger, task_scope=user_task)
+        try:
+            if LOCAL_ONLY:
+                result = _run_ollama_agent(
+                    final_task,
+                    model,
+                    ollama,
+                    logger,
+                    image_messages=images,
+                    task_scope=user_task,
+                )
+            else:
+                result = _run_claude_agent(final_task, claude, logger, task_scope=user_task)
+        except KeyboardInterrupt:
+            # Ctrl+C during a tool cancels THIS task, not the whole Code mode.
+            print(f"\n  {warn('Task interrupted — back at the CODE prompt (mode still running).')}\n")
+            continue
         if result.startswith(("Ollama error:", "Claude error:")):
             print(f"  {err(result)}\n")
         memory.record_assistant(result, model=active_model, metadata=metadata)

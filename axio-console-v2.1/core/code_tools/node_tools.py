@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,6 +11,57 @@ from pathlib import Path
 from core.config import CODE_NODE_TIMEOUT, TIMEOUT
 
 from .registry import CodeTool, ToolResult
+
+# Scripts that start a persistent process (dev server / watcher) and never exit
+# on their own. Running these with a blocking, output-capturing subprocess would
+# freeze the whole console until the timeout, so they are launched detached.
+_LONG_RUNNING_NAMES = {"dev", "start", "serve", "watch", "preview", "storybook"}
+# Precise server/watch markers only — deliberately NOT bare "vite"/"next", which
+# also appear in one-shot scripts like "vite build".
+_LONG_RUNNING_MARKERS = (
+    "nodemon", "--watch", "webpack serve", "webpack-dev-server",
+    "http-server", "live-server", "vite dev", "vite serve", "vite preview",
+    "next dev", "nuxt dev", "astro dev", "remix dev", "ng serve",
+)
+
+
+def _is_long_running(script: str, script_body: str) -> bool:
+    if script.lower() in _LONG_RUNNING_NAMES:
+        return True
+    body = str(script_body or "").lower()
+    return any(marker in body for marker in _LONG_RUNNING_MARKERS)
+
+
+def _launch_detached(command: list[str], root: Path, script: str) -> ToolResult:
+    """Start a persistent script in the background, logging to a file, and return
+    immediately so the agent/console is never blocked by a server that won't exit."""
+    log_path = root / f".axio-dev-{script}.log"
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0)
+    try:
+        log_file = open(log_path, "w", encoding="utf-8")
+    except OSError as exc:
+        return ToolResult(f"ERROR: cannot open log file {log_path}: {exc}", ok=False)
+    try:
+        proc = subprocess.Popen(
+            command, cwd=str(root), stdout=log_file, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, creationflags=creationflags, close_fds=True,
+        )
+    except OSError as exc:
+        log_file.close()
+        return ToolResult(f"ERROR launching npm '{script}': {exc}", ok=False)
+    finally:
+        log_file.close()  # the child keeps its own inherited handle
+    return ToolResult(
+        f"Started long-running npm script '{script}' in the background (PID {proc.pid}).\n"
+        f"Working dir: {root}\n"
+        f"Logs: {log_path}\n"
+        "It is left running so the agent is not blocked. Read the log file for the "
+        "dev URL, or open that URL in the Browser preview. It keeps running after "
+        "this session; stop it from Task Manager or `taskkill`.",
+        ok=True,
+    )
 
 
 def _working_directory(path: str) -> Path:
@@ -91,6 +143,10 @@ def run_npm_script(
     command = [npm, "run", script]
     if args:
         command.extend(["--", *[str(item) for item in args]])
+    # A persistent dev server/watcher never returns; run it detached instead of
+    # blocking the console for the full timeout (the root cause of a frozen session).
+    if _is_long_running(script, scripts.get(script, "")):
+        return _launch_detached(command, root, script)
     try:
         process = subprocess.run(command, cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, shell=False)
     except subprocess.TimeoutExpired:
