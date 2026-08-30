@@ -1,7 +1,9 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from core.code_tools import build_default_registry
 from core.code_tools.router import (
@@ -31,8 +33,18 @@ class ToolRouterTests(unittest.TestCase):
         self.assertEqual(classify_task("rename and organize these files"), TaskType.FILE_OPS)
         self.assertEqual(classify_task("implement a Python module"), TaskType.CODE_EDIT)
         self.assertEqual(classify_complexity("show status"), "simple")
-        self.assertEqual(step_budget("run the full benchmark evaluation"), 100)
-        self.assertEqual(step_budget("migrate the architecture end-to-end"), 50)
+        # Classification budgets apply when no explicit override is set.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AXIO_CODE_MAX_STEPS", None)
+            self.assertEqual(step_budget("run the full benchmark evaluation"), 100)
+            self.assertEqual(step_budget("migrate the architecture end-to-end"), 50)
+            self.assertEqual(step_budget("show status"), 10)
+        # An explicit AXIO_CODE_MAX_STEPS override wins over classification (capped at 200).
+        with mock.patch.dict(os.environ, {"AXIO_CODE_MAX_STEPS": "35"}):
+            self.assertEqual(step_budget("show status"), 35)
+            self.assertEqual(step_budget("run the full benchmark evaluation"), 35)
+        with mock.patch.dict(os.environ, {"AXIO_CODE_MAX_STEPS": "9999"}):
+            self.assertEqual(step_budget("x"), 200)
 
     def test_every_dynamic_subset_is_bounded_and_has_stable_core(self):
         registry = build_default_registry()

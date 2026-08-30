@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import uuid
 from collections import Counter, deque
@@ -79,6 +80,16 @@ def classify_complexity(prompt: str) -> str:
 
 
 def step_budget(prompt: str) -> int:
+    # An explicit override wins over automatic complexity classification, so the
+    # step budget never depends on how the task happens to be phrased.
+    override = os.getenv("AXIO_CODE_MAX_STEPS")
+    if override:
+        try:
+            n = int(override)
+        except ValueError:
+            n = 0
+        if n > 0:
+            return min(n, 200)
     return COMPLEXITY_BUDGETS[classify_complexity(prompt)]
 
 

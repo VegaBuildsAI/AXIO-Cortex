@@ -12,6 +12,15 @@ if TYPE_CHECKING:
 
 
 _NPM_PATTERN = re.compile(r"\bnpm(?:\.cmd)?\s+(?:run\s+)?([\w:.-]+)", re.IGNORECASE)
+_PYCOMPILE_PATTERN = re.compile(r"py_compile", re.IGNORECASE)
+_SELFTEST_PATTERN = re.compile(r"--self[-_]?test\b", re.IGNORECASE)
+_PYTEST_PATTERN = re.compile(r"(?:\bpytest\b|-m\s+pytest\b|-m\s+unittest\b)", re.IGNORECASE)
+# A python interpreter (py / python / python3 / a path to python[.exe]) running a .py file.
+_PYRUN_PATTERN = re.compile(
+    r"(?:^|[\\/\s\"'])(?:py|python|python3|[^\s\"']*python(?:\.exe)?)\s+(?:-[^\s]+\s+)*"
+    r"[\"']?([^\s\"']+\.py)[\"']?",
+    re.IGNORECASE,
+)
 _ARTIFACT_PATTERNS = {
     "artifact:docx": re.compile(r"(?i)(?:\.docx\b|\bword\b|documento\s+(?:de\s+)?word)"),
     "artifact:xlsx": re.compile(r"(?i)(?:\.xlsx\b|\bexcel\b|hoja\s+de\s+c[aá]lculo|libro\s+(?:de\s+)?excel)"),
@@ -53,10 +62,29 @@ def extract_artifact_requirements(text: str) -> tuple[str, ...]:
 
 
 def verification_ids_from_command(command: str) -> tuple[str, ...]:
+    """Map a shell command to the verification-check ids a successful run proves.
+
+    Recognizes Python build/test evidence (py_compile, --selftest, pytest/unittest,
+    a plain `python foo.py` run) in addition to npm scripts, so a headless check
+    run through run_command counts toward the completion gate — not only run_python.
+    """
+    command = command or ""
+    ids: set[str] = set()
+    if _PYCOMPILE_PATTERN.search(command):
+        ids.add("compile")
+    if _SELFTEST_PATTERN.search(command):
+        ids.add("python:selftest")
+    if _PYTEST_PATTERN.search(command):
+        ids.add("python:tests")
+    if not ids:
+        match = _PYRUN_PATTERN.search(command)
+        if match:
+            from pathlib import PurePath
+            ids.add(f"python:{PurePath(match.group(1)).name}")
     lowered = command.casefold()
-    if not any(word in lowered for word in ("test", "build", "verify", "check", "lint")):
-        return ()
-    return extract_verification_requirements(command)
+    if any(word in lowered for word in ("test", "build", "verify", "check", "lint")):
+        ids.update(extract_verification_requirements(command))
+    return tuple(sorted(ids))
 
 
 def make_verification_gate_tool(registry: "CodeToolRegistry") -> CodeTool:

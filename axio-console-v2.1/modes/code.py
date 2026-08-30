@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -594,6 +595,7 @@ HELP = f"""
   {YELLOW}model{RESET}              Show active model
   {YELLOW}model <name>{RESET}       Local: select Ollama model; cloud: select Claude alias/id
   {YELLOW}effort <level>{RESET}     Claude effort: low, medium, high, xhigh, max
+  {YELLOW}steps <n>{RESET}          Force agent step budget (1-200); {YELLOW}steps auto{RESET} to reset
   {YELLOW}memory status{RESET}      Show Code memory backend status
   {YELLOW}clear{RESET}              Clear approved plan and attached images
   {YELLOW}help{RESET} / {YELLOW}exit{RESET}
@@ -736,6 +738,23 @@ def run(force_claude_session: bool = False) -> None:
                 continue
             selected = claude_runtime.set_effort(command.split(maxsplit=1)[1])
             print(f"  {ok(f'Effort: {selected}')}\n" if selected else f"  {warn(claude_runtime.options())}\n")
+            continue
+        if command == "steps" or command.startswith("steps "):
+            parts = task.split(maxsplit=1)
+            arg = parts[1].strip() if len(parts) > 1 else ""
+            if not arg:
+                cur = os.getenv("AXIO_CODE_MAX_STEPS")
+                print(f"  Step budget: {cur if cur else 'auto (by task complexity)'}\n")
+            elif arg.lower() in {"auto", "reset", "off", "default"}:
+                os.environ.pop("AXIO_CODE_MAX_STEPS", None)
+                print(f"  {ok('Step budget: auto (by task complexity)')}\n")
+            else:
+                try:
+                    n = max(1, min(200, int(arg)))
+                    os.environ["AXIO_CODE_MAX_STEPS"] = str(n)
+                    print(f"  {ok(f'Step budget fixed at {n} for this session')}\n")
+                except ValueError:
+                    print(f"  {warn('Usage: steps <n>  (1-200)  ·  steps auto  to reset')}\n")
             continue
         if command.startswith("vision "):
             if not LOCAL_ONLY:

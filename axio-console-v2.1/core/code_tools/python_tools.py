@@ -15,6 +15,30 @@ def inspect_environment(working_dir: str | None = None) -> str:
     return inspect_python_environment(working_dir)
 
 
+# GUI / event-loop markers that make a script run forever and block the console.
+_INTERACTIVE_MARKERS = (
+    "import tkinter", "from tkinter", ".mainloop(",
+    "import pygame", "pygame.display", "pyqt", "pyside", "import kivy",
+    "import arcade", "app.exec", "pyglet.app.run", "turtle.done(", "turtle.mainloop(",
+)
+# Arg tokens that mean "run a bounded, non-interactive path" (safe to execute).
+_NONINTERACTIVE_ARG_MARKERS = (
+    "--selftest", "--self-test", "--test", "--tests", "--headless",
+    "--check", "--ci", "--smoke", "-m",
+)
+
+
+def _looks_interactive(script: Path, args: list[str]) -> bool:
+    """True if the script opens a GUI / event loop AND no bounded/test flag was passed."""
+    if any(any(m in a.lower() for m in _NONINTERACTIVE_ARG_MARKERS) for a in args):
+        return False
+    try:
+        text = script.read_text(encoding="utf-8", errors="replace").lower()
+    except OSError:
+        return False
+    return any(marker in text for marker in _INTERACTIVE_MARKERS)
+
+
 def run_python(
     script_path: str,
     args: list[str] | None = None,
@@ -35,6 +59,19 @@ def run_python(
         return ToolResult(f"ERROR: Working directory not found: {cwd}", ok=False)
     interpreter = resolve_python_interpreter(cwd)
     safe_args = [str(item) for item in (args or [])]
+
+    # A GUI / event-loop script never returns on its own; running it synchronously
+    # would freeze the console until the timeout (and the agent can't see a window).
+    # Refuse fast and point to the bounded path instead of blocking.
+    if _looks_interactive(script, safe_args):
+        return ToolResult(
+            f"SKIPPED: '{script.name}' looks like a GUI / long-running app (imports "
+            "tkinter/pygame or calls mainloop). Running it here would block the "
+            "console and can't be observed. Verify it with a bounded flag instead — "
+            "e.g. run it with --selftest (args=[\"--selftest\"]) or `py -m py_compile` — "
+            "and leave launching the window to the user.",
+            ok=False,
+        )
     timeout = max(1, min(int(timeout_seconds), TIMEOUT))
 
     try:
