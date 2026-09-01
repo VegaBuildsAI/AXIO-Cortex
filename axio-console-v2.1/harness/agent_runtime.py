@@ -20,12 +20,6 @@ from __future__ import annotations
 from agents.base import AgentSpec
 from agents.registry import get
 from core.code_tools.tool_loop import run_tool_loop
-from harness.opportunity_gateway import (
-    OpportunityGatewayClient,
-    OpportunityGatewayError,
-    source_task_id,
-    submit_sales_intake,
-)
 
 DELEGATE_TOOL = "delegate_to_peer"
 MAX_DELEGATION_DEPTH = 2
@@ -52,7 +46,7 @@ def _delegate_schema(spec: AgentSpec, provider: str) -> dict:
 def run_agent(spec: AgentSpec, task: str, *, provider: str, model=None,
               ollama=None, claude=None, approve=None, audit=None,
               memory_prefix: str = "", verbose: bool = True, bus=None,
-              depth: int = 0, opportunity_gateway=None) -> dict:
+              depth: int = 0) -> dict:
     """Run one agent to completion, returning {"status": "ok"|"ERROR", ...}."""
     provider = provider.strip().lower()
     system = spec.system_prompt
@@ -102,43 +96,19 @@ def run_agent(spec: AgentSpec, task: str, *, provider: str, model=None,
         )
     except Exception as exc:  # a live agent failure must not crash the orchestrator
         return {"status": "ERROR", "reason": f"{spec.name} failed: {exc}"}
-    if spec.name == "sales-intake":
-        if opportunity_gateway is None:
-            return {
-                "status": "ERROR",
-                "reason": (
-                    "sales-intake gateway is not configured; set "
-                    "AXIO_OPPORTUNITY_GATEWAY_URL and AXIO_INTERNAL_TOKEN."
-                ),
-            }
-        try:
-            result = submit_sales_intake(
-                result,
-                client=opportunity_gateway,
-                task_id=source_task_id(task),
-            )
-        except OpportunityGatewayError as exc:
-            return {"status": "ERROR", "reason": str(exc)}
     return {"status": "ok", "result": result}
 
 
 def make_run_agent(*, provider: str, model=None, ollama=None, claude=None,
                    approve=None, audit=None, memory_prefix: str = "",
-                   verbose: bool = True, bus=None, opportunity_gateway=None):
+                   verbose: bool = True, bus=None):
     """Bind runtime context into the ``run_agent(spec, task)`` the Orchestrator needs."""
-
-    if opportunity_gateway is None:
-        try:
-            opportunity_gateway = OpportunityGatewayClient.from_environment()
-        except OpportunityGatewayError:
-            opportunity_gateway = None
 
     def _run(spec: AgentSpec, task: str) -> dict:
         return run_agent(
             spec, task, provider=provider, model=model, ollama=ollama, claude=claude,
             approve=approve, audit=audit, memory_prefix=memory_prefix,
             verbose=verbose, bus=bus, depth=0,
-            opportunity_gateway=opportunity_gateway,
         )
 
     return _run

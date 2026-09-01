@@ -4,10 +4,10 @@ from agents.registry import AGENT_REGISTRY, get, internet_agents
 from harness import dispatcher
 
 
-def test_nine_agents_present():
+def test_eight_agents_present():
     assert set(AGENT_REGISTRY) == {
         "FSAgent", "RunAgent", "SearchAgent", "WebAgent",
-        "GitAgent", "TestAgent", "PlanAgent", "CtxAgent", "sales-intake",
+        "GitAgent", "TestAgent", "PlanAgent", "CtxAgent",
     }
 
 
@@ -53,11 +53,3 @@ def test_dispatcher_schemas_scoped_per_agent():
 def test_peer_map_guard():
     assert get("SearchAgent").can_call("WebAgent") is True
     assert get("SearchAgent").can_call("GitAgent") is False
-
-
-def test_sales_intake_has_no_direct_tools_or_internet():
-    spec = get("sales-intake")
-    assert spec.live_tools() == ()
-    assert spec.internet_access is False
-    assert spec.can_call("SearchAgent") is True
-    assert spec.can_call("GitAgent") is False
