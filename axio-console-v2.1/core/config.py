@@ -131,6 +131,13 @@ if CODE_TOOL_ROUTING_MODE not in {"full", "dynamic"}:
     CODE_TOOL_ROUTING_MODE = "full"
 CODE_COMMAND_TIMEOUT = int(os.getenv("AXIO_CODE_COMMAND_TIMEOUT", "120"))
 
+# Private AXIO opportunity-draft integration. The token is read from the
+# local environment only and is never included in source, logs, or prompts.
+AXIO_OPPORTUNITY_GATEWAY_URL = os.getenv(
+    "AXIO_OPPORTUNITY_GATEWAY_URL", ""
+).rstrip("/")
+AXIO_INTERNAL_TOKEN = os.getenv("AXIO_INTERNAL_TOKEN", "")
+
 # ---------------------------------------------------------
 #  CODE WEB / BROWSER / RETRIEVAL
 # ---------------------------------------------------------

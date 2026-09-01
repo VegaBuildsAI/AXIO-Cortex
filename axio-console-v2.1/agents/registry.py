@@ -149,10 +149,35 @@ CTX_AGENT = AgentSpec(
     ),
 )
 
+SALES_INTAKE_AGENT = AgentSpec(
+    name="sales-intake",
+    description=(
+        "Qualifies a consented business inquiry into a lead candidate and submits "
+        "a draft for AXIO's internal review inbox. Never contacts the lead."
+    ),
+    tools=(),
+    risk=MEDIUM,
+    fallback=None,
+    internet_access=False,
+    peers=("SearchAgent",),
+    system_prompt=(
+        "You are AXIO sales-intake. Work only from the supplied conversation and "
+        "any delegated public service-matching result. Produce ONLY one JSON object "
+        "with these keys: lead (name, email, company), requirement, "
+        "conversation_summary, matched_service_ids (array), confidence (0..1), "
+        "consent_to_contact (boolean). Do not invent missing lead details; use an "
+        "empty string or null when unavailable. A draft may be submitted only when "
+        "the user explicitly consented to AXIO contacting them. Never create a "
+        "price, quote, proposal, contract, negotiation, or outreach message. The "
+        "submission creates an internal AXIO review notification only; it never "
+        "contacts the lead."
+    ),
+)
+
 AGENT_REGISTRY: dict[str, AgentSpec] = {
     a.name: a for a in (
         FS_AGENT, RUN_AGENT, SEARCH_AGENT, WEB_AGENT,
-        GIT_AGENT, TEST_AGENT, PLAN_AGENT, CTX_AGENT,
+        GIT_AGENT, TEST_AGENT, PLAN_AGENT, CTX_AGENT, SALES_INTAKE_AGENT,
     )
 }
 
