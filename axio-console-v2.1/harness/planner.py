@@ -131,19 +131,30 @@ def build_plan(task: str, *, provider: str, model=None, ollama=None, claude=None
 
 def run_orchestrated(task: str, *, provider: str, model=None, ollama=None, claude=None,
                      approve=None, audit=None, memory_prefix: str = "",
-                     verbose: bool = True, parallel: bool = True, printer=print) -> str:
-    """Plan the task, run it across the agent fleet, and return the synthesis."""
+                     verbose: bool = True, parallel: bool = True, printer=print,
+                     on_plan=None, on_event=None) -> str:
+    """Plan the task, run it across the agent fleet, and return the synthesis.
+
+    ``on_plan(plan)`` fires once the plan is built; ``on_event(dict)`` fires on every
+    step start/end. Both are optional live-progress sinks (e.g. a web SSE emitter)
+    used to visualize the agent flow in real time; failures in them never break the run.
+    """
     plan = build_plan(task, provider=provider, model=model, ollama=ollama, claude=claude)
     printer("\n  PLAN (multi-agent):")
     for line in plan.phase_summary():
         printer(f"    {line}")
     printer("")
+    if on_plan is not None:
+        try:
+            on_plan(plan)
+        except Exception:
+            pass
 
     bus = EventBus()
     runner = make_run_agent(
         provider=provider, model=model, ollama=ollama, claude=claude,
         approve=approve, audit=audit, memory_prefix=memory_prefix, verbose=verbose, bus=bus,
     )
-    orchestrator = Orchestrator(runner, bus=bus, parallel=parallel)
+    orchestrator = Orchestrator(runner, bus=bus, parallel=parallel, on_event=on_event)
     summary, _results = orchestrator.run(plan)
     return summary

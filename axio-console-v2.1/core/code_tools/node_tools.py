@@ -53,13 +53,19 @@ def _launch_detached(command: list[str], root: Path, script: str) -> ToolResult:
         return ToolResult(f"ERROR launching npm '{script}': {exc}", ok=False)
     finally:
         log_file.close()  # the child keeps its own inherited handle
+    from . import job_registry
+
+    job_id = job_registry.register(
+        pid=proc.pid, script=script, workspace=str(root),
+        log_path=str(log_path), proc=proc,
+    )
     return ToolResult(
-        f"Started long-running npm script '{script}' in the background (PID {proc.pid}).\n"
+        f"Started long-running npm script '{script}' in the background (PID {proc.pid}, job {job_id}).\n"
         f"Working dir: {root}\n"
         f"Logs: {log_path}\n"
         "It is left running so the agent is not blocked. Read the log file for the "
-        "dev URL, or open that URL in the Browser preview. It keeps running after "
-        "this session; stop it from Task Manager or `taskkill`.",
+        "dev URL, or open that URL in the Browser preview. It is tracked in the "
+        "Background jobs panel and can be stopped from there.",
         ok=True,
     )
 

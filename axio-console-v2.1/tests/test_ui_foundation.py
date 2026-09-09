@@ -174,7 +174,7 @@ class ServiceFailureTests(unittest.TestCase):
 
         # This exercises the Claude cloud path, so force LOCAL_ONLY off (otherwise
         # _code_worker dispatches to the local Ollama agent and ignores the mock).
-        with patch("web_api.services.LOCAL_ONLY", False), patch(
+        with patch("core.runtime_mode.get_local_only", new=lambda: False), patch(
             "web_api.services.ClaudeClient", OfflineClaude
         ):
             with self.assertRaisesRegex(

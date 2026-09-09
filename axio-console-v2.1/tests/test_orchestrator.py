@@ -75,3 +75,22 @@ def test_bus_records_dispatch_events():
     plan = _plan([PlanStep(1, "IMPLEMENT", "w", "FSAgent")])
     Orchestrator(run_agent, bus=bus, parallel=False).run(plan)
     assert any(m.msg_type == "STEP_DISPATCH" for m in bus.history)
+
+
+def test_on_event_streams_step_lifecycle():
+    """The on_event sink receives start/end for run steps and end for skipped ones."""
+    def run_agent(spec, task):
+        if spec.name == "FSAgent":
+            return {"status": "ERROR", "reason": "disk full"}
+        return {"status": "ok", "result": "ok"}
+    events = []
+    plan = _plan([
+        PlanStep(1, "IMPLEMENT", "write", "FSAgent"),
+        PlanStep(2, "TEST", "test", "TestAgent", depends_on=(1,)),
+    ])
+    Orchestrator(run_agent, parallel=False, on_event=events.append).run(plan)
+    kinds = [(e["kind"], e["agent"], e.get("outcome")) for e in events]
+    assert ("step_start", "FSAgent", None) in kinds       # step 1 dispatched
+    assert ("step_end", "FSAgent", FAILED) in kinds        # step 1 failed
+    assert ("step_end", "TestAgent", "SKIPPED") in kinds   # step 2 skipped (never started)
+    assert ("step_start", "TestAgent", None) not in kinds

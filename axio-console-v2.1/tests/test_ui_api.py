@@ -28,7 +28,7 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(body["bind_host"], "127.0.0.1")
         self.assertEqual(body["ollama"]["model"], "gemma4:12b")
 
-    @patch("web_api.main.LOCAL_ONLY", False)
+    @patch("core.runtime_mode.get_local_only", new=lambda: False)
     @patch("web_api.main.CLAUDE_API_KEY", "")
     def test_code_fails_closed_without_claude_key_in_cloud_mode(self):
         # When LOCAL_ONLY is off and no Claude key is present, Code mode must

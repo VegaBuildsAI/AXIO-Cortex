@@ -9,13 +9,15 @@ from fastapi.responses import StreamingResponse
 
 from core.config import (
     AXIO_DATA_ROOT,
+    AXIO_MEMORY_BACKEND,
+    AXIO_SEARXNG_URL,
     BASE,
     CLAUDE_API_KEY,
     CLAUDE_MODEL,
-    LOCAL_ONLY,
     MODELS,
     OLLAMA_HOST,
 )
+from core import runtime_mode
 from core.models import OllamaClient
 
 from .runs import RunManager
@@ -24,6 +26,7 @@ from .schemas import (
     ConversationCreate,
     ConversationUpdate,
     MessageCreate,
+    RuntimeModeUpdate,
     WorkspaceOpen,
 )
 from .services import AxioServices
@@ -60,12 +63,37 @@ app.add_middleware(
 )
 
 
+def _postgres_status() -> dict:
+    """Liveness of the Cortex Postgres backend (only when it is the selected store)."""
+    if AXIO_MEMORY_BACKEND != "postgres":
+        return {"backend": AXIO_MEMORY_BACKEND, "available": None}
+    try:
+        from core.memory_backends.postgres_backend import PostgresMemoryBackend
+
+        available = PostgresMemoryBackend("console").healthcheck()
+    except Exception:
+        available = False
+    return {"backend": "postgres", "available": available}
+
+
+def _searxng_status() -> dict:
+    """Reachability of the SearXNG instance used by the web tools."""
+    try:
+        import requests
+
+        response = requests.get(AXIO_SEARXNG_URL, timeout=1.5)
+        available = response.status_code < 500
+    except Exception:
+        available = False
+    return {"available": available, "url": AXIO_SEARXNG_URL}
+
+
 @app.get("/api/health")
 def health():
     ollama = OllamaClient()
     return {
         "status": "ok",
-        "local_only": LOCAL_ONLY,
+        "local_only": runtime_mode.get_local_only(),
         "bind_host": "127.0.0.1",
         "data_root": str(AXIO_DATA_ROOT),
         "ollama": {
@@ -77,13 +105,30 @@ def health():
             "configured": bool(CLAUDE_API_KEY),
             "model": CLAUDE_MODEL,
         },
+        "postgres": _postgres_status(),
+        "searxng": _searxng_status(),
     }
+
+
+@app.get("/api/runtime-mode")
+def get_runtime_mode():
+    return runtime_mode.describe()
+
+
+@app.post("/api/runtime-mode")
+def set_runtime_mode(body: RuntimeModeUpdate):
+    if not body.local_only and not CLAUDE_API_KEY:
+        # Allow the switch, but tell the UI the Claude path is not usable yet.
+        runtime_mode.set_local_only(False)
+        return {**runtime_mode.describe(), "warning": "ANTHROPIC_API_KEY is not set; Code will fail until a key is configured."}
+    runtime_mode.set_local_only(body.local_only)
+    return runtime_mode.describe()
 
 
 @app.get("/api/capabilities")
 def capabilities():
     ollama = OllamaClient()
-    if LOCAL_ONLY:
+    if runtime_mode.get_local_only():
         code_capability = {
             "backend": "ollama",
             "model": MODELS["coding"],
@@ -104,7 +149,7 @@ def capabilities():
             "code": code_capability,
         },
         "streaming": "sse",
-        "local_only": LOCAL_ONLY,
+        "local_only": runtime_mode.get_local_only(),
     }
 
 
@@ -160,7 +205,7 @@ def send_message(conversation_id: str, body: MessageCreate):
     if not conversation:
         raise HTTPException(404, "Conversation not found.")
     if conversation["mode"] == "code":
-        if not LOCAL_ONLY and not CLAUDE_API_KEY:
+        if not runtime_mode.get_local_only() and not CLAUDE_API_KEY:
             raise HTTPException(
                 503,
                 "Code mode requires ANTHROPIC_API_KEY. No local fallback is enabled.",
@@ -168,7 +213,9 @@ def send_message(conversation_id: str, body: MessageCreate):
         if not conversation.get("workspace_id"):
             raise HTTPException(422, "Code mode requires an active workspace.")
     try:
-        run = services.start(conversation, body.content.strip(), body.file_ids)
+        run = services.start(
+            conversation, body.content.strip(), body.file_ids, orchestrate=body.orchestrate
+        )
     except (KeyError, ValueError) as exc:
         raise HTTPException(422, str(exc))
     return runs.summary(run.id)
@@ -220,6 +267,33 @@ def deny(approval_id: str, body: ApprovalDecision):
         return runs.resolve_approval(approval_id, "denied", body.note)
     except KeyError:
         raise HTTPException(404, "Approval not found.")
+
+
+@app.get("/api/jobs")
+def list_jobs():
+    from core.code_tools import job_registry
+
+    return job_registry.list_jobs()
+
+
+@app.post("/api/jobs/{job_id}/stop")
+def stop_job(job_id: str):
+    from core.code_tools import job_registry
+
+    try:
+        return job_registry.stop(job_id)
+    except KeyError:
+        raise HTTPException(404, "Job not found.")
+
+
+@app.get("/api/jobs/{job_id}/log")
+def job_log(job_id: str):
+    from core.code_tools import job_registry
+
+    try:
+        return {"id": job_id, "log": job_registry.tail_log(job_id)}
+    except KeyError:
+        raise HTTPException(404, "Job not found.")
 
 
 @app.get("/api/workspaces")

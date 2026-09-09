@@ -17,6 +17,8 @@ class ConversationCreate(BaseModel):
 class MessageCreate(BaseModel):
     content: str = Field(min_length=1, max_length=100_000)
     file_ids: list[str] = Field(default_factory=list, max_length=50)
+    # Code mode only: run the multi-agent orchestrator instead of the flat agent.
+    orchestrate: bool = False
 
 
 class ConversationUpdate(BaseModel):
@@ -30,3 +32,9 @@ class WorkspaceOpen(BaseModel):
 
 class ApprovalDecision(BaseModel):
     note: str = Field(default="", max_length=500)
+
+
+class RuntimeModeUpdate(BaseModel):
+    # True  -> "Gemma local only" (LOCAL_ONLY): everything runs on Ollama.
+    # False -> "local + Claude API": Code (and premium routes) boost to Claude.
+    local_only: bool

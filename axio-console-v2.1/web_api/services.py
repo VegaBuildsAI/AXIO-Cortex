@@ -9,7 +9,6 @@ import requests
 
 from core.config import (
     CLAUDE_MODEL,
-    LOCAL_ONLY,
     MAX_FILE_CHARS,
     MAX_ITERS,
     MODELS,
@@ -17,9 +16,13 @@ from core.config import (
     TIMEOUT,
 )
 from core import pricing
+from core import runtime_mode
+from core.code_tools import summarize_arguments
 from core.logger import AuditLogger
 from core.mode_memory import ModeMemorySession
 from core.models import ClaudeClient, OllamaClient
+from agents.registry import AGENT_REGISTRY
+from harness.planner import run_orchestrated
 
 from .runs import RunManager, RunState
 from .store import ConversationStore
@@ -138,19 +141,20 @@ class AxioServices:
         self.workspaces = workspaces
         self.runs = runs
 
-    def start(self, conversation: dict, content: str, file_ids: list[str]) -> RunState:
+    def start(self, conversation: dict, content: str, file_ids: list[str],
+              orchestrate: bool = False) -> RunState:
         mode = conversation["mode"]
         self.store.add_message(conversation["id"], "user", content)
-        worker = {
-            "chat": self._chat_worker,
-            "cowork": self._cowork_worker,
-            "code": self._code_worker,
-        }[mode]
-        return self.runs.create(
-            conversation["id"],
-            mode,
-            lambda run: worker(run, content, file_ids),
-        )
+        if mode == "code" and orchestrate:
+            worker = lambda run: self._code_worker_orchestrated(run, content)
+        else:
+            base = {
+                "chat": self._chat_worker,
+                "cowork": self._cowork_worker,
+                "code": self._code_worker,
+            }[mode]
+            worker = lambda run: base(run, content, file_ids)
+        return self.runs.create(conversation["id"], mode, worker)
 
     def _conversation_messages(self, conversation_id: str) -> list[dict]:
         conversation = self.store.get(conversation_id) or {}
@@ -339,10 +343,78 @@ class AxioServices:
         workspace_id = conversation.get("workspace_id")
         if not workspace_id:
             raise ValueError("Code mode requires an active workspace.")
-        if LOCAL_ONLY:
+        if runtime_mode.get_local_only():
             self._code_worker_local(run, content, workspace_id)
         else:
             self._code_worker_claude(run, content, workspace_id)
+
+    def _code_worker_orchestrated(self, run: RunState, content: str) -> None:
+        """Multi-agent path: plan the task and run it across the agent fleet,
+        streaming the plan + live per-step flow to the UI's Agents panel."""
+        conversation = self.store.get(run.conversation_id)
+        workspace_id = conversation.get("workspace_id")
+        if not workspace_id:
+            raise ValueError("Code mode requires an active workspace.")
+        root = Path(self.workspaces.get(workspace_id)["path"])
+
+        if runtime_mode.get_local_only():
+            provider, model, ollama, claude = "ollama", MODELS["coding"], OllamaClient(), None
+        else:
+            provider, model, ollama, claude = "claude", CLAUDE_MODEL, None, ClaudeClient(model=CLAUDE_MODEL)
+
+        def approve(tool, args: dict) -> bool:
+            approval = self.runs.request_approval(
+                run,
+                getattr(tool, "name", "tool"),
+                {"risk": getattr(tool, "risk", ""), "args": summarize_arguments(args)},
+            )
+            return approval.decision == "approved"
+
+        def printer(line: str = "") -> None:
+            text = str(line).strip()
+            if text:
+                self.runs.emit(run.id, "status", {"label": text})
+
+        def on_plan(plan) -> None:
+            names = sorted({step.agent for step in plan.steps})
+            roster = [
+                {
+                    "name": name,
+                    "description": AGENT_REGISTRY[name].description,
+                    "internet": AGENT_REGISTRY[name].internet_access,
+                }
+                for name in names
+                if name in AGENT_REGISTRY
+            ]
+            self.runs.emit(run.id, "agent_plan", {
+                "task": plan.task,
+                "agents": roster,
+                "steps": [
+                    {
+                        "id": step.id,
+                        "phase": step.phase,
+                        "agent": step.agent,
+                        "description": step.description,
+                        "depends_on": list(step.depends_on),
+                    }
+                    for step in plan.steps
+                ],
+            })
+
+        def on_event(event: dict) -> None:
+            self.runs.emit(run.id, "agent_event", event)
+
+        self.runs.emit(run.id, "status", {"label": "Multi-agent orchestrator active", "model": model})
+        memory_prefix = f"Active workspace root (use absolute paths under it): {root}"
+        summary = run_orchestrated(
+            content, provider=provider, model=model, ollama=ollama, claude=claude,
+            approve=approve, memory_prefix=memory_prefix, verbose=False, parallel=False,
+            printer=printer, on_plan=on_plan, on_event=on_event,
+        )
+        self._finish_turn(
+            run, content, summary, "code", model,
+            {"backend": provider, "workspace_id": workspace_id, "orchestrated": True},
+        )
 
     def _code_worker_local(self, run: RunState, content: str, workspace_id: str) -> None:
         """On-device coding agent: Ollama tool-calling over the workspace tools,

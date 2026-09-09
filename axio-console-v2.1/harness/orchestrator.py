@@ -33,12 +33,25 @@ RunAgent = Callable[[AgentSpec, str], dict]
 class Orchestrator:
     def __init__(self, run_agent: RunAgent, *, bus: EventBus | None = None,
                  timeout_s: float = monitor.DEFAULT_TIMEOUT_S,
-                 parallel: bool = True, max_workers: int = 4) -> None:
+                 parallel: bool = True, max_workers: int = 4,
+                 on_event: Callable[[dict], None] | None = None) -> None:
         self.run_agent = run_agent
         self.bus = bus or EventBus()
         self.timeout_s = timeout_s
         self.parallel = parallel
         self.max_workers = max_workers
+        # Optional live-progress sink (e.g. a web SSE emitter). Called from worker
+        # threads, so it must be thread-safe; failures here never break the run.
+        self._on_event = on_event
+
+    def _emit(self, kind: str, step: PlanStep, **fields) -> None:
+        if self._on_event is None:
+            return
+        try:
+            self._on_event({"kind": kind, "step": step.id, "agent": step.agent,
+                            "phase": step.phase, "status": step.status, **fields})
+        except Exception:
+            pass
 
     # ── a single step, with timeout + fallback ───────────────────────────────
     def _dispatch(self, name: str, task: str) -> dict:
@@ -54,6 +67,7 @@ class Orchestrator:
         task = step.description if not context else f"{step.description}\n\nContext:\n{context}"
         self.bus.publish("ORCHESTRATOR", step.agent, "STEP_DISPATCH",
                          {"step": step.id, "phase": step.phase})
+        self._emit("step_start", step, description=step.description)
 
         fr = fallback.run_with_fallback(step.agent, task, self._dispatch)
         resp = fr.response
@@ -64,13 +78,19 @@ class Orchestrator:
             monitor.log_event(step.id, step.agent,
                               "ESCALATE" if fr.escalated_to_user else "FAILED",
                               detail=f"trail={fr.trail}")
-            return StepResult(step.id, fr.trail[-1] if fr.trail else step.agent,
-                              status, resp.get("reason") or resp.get("result", ""))
+            result = StepResult(step.id, fr.trail[-1] if fr.trail else step.agent,
+                                status, resp.get("reason") or resp.get("result", ""))
+            self._emit("step_end", step, resolved_agent=result.agent,
+                       outcome=status, output=str(result.output)[:400])
+            return result
 
         step.status = DONE
         outcome = "FALLBACK" if len(fr.trail) > 1 else "OK"
         monitor.log_event(step.id, fr.trail[-1], outcome, detail=f"trail={fr.trail}")
-        return StepResult(step.id, fr.trail[-1], DONE, str(resp.get("result", "")))
+        result = StepResult(step.id, fr.trail[-1], DONE, str(resp.get("result", "")))
+        self._emit("step_end", step, resolved_agent=result.agent,
+                   outcome=outcome, output=str(result.output)[:400])
+        return result
 
     # ── whole plan, level by level ───────────────────────────────────────────
     def run(self, plan: Plan) -> tuple[str, list[StepResult]]:
@@ -89,6 +109,8 @@ class Orchestrator:
                 results[step.id] = StepResult(step.id, step.agent, SKIPPED,
                                               "skipped: upstream step failed")
                 monitor.log_event(step.id, step.agent, "SKIPPED")
+                self._emit("step_end", step, resolved_agent=step.agent,
+                           outcome="SKIPPED", output="skipped: upstream step failed")
 
             def _ctx(step: PlanStep) -> str:
                 return "\n".join(
