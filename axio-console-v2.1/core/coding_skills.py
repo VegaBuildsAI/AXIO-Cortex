@@ -115,8 +115,18 @@ def load_tool_calling_skills(root: Path | None = None) -> dict[str, ToolCallingS
     return catalog
 
 
-def render_tool_calling_skills(root: Path | None = None) -> str:
-    """Render all registered tool skills compactly for the model system prompt."""
+def render_tool_calling_skills(
+    root: Path | None = None,
+    tool_names: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    """Render tool skills compactly for the model system prompt.
+
+    With ``tool_names`` (dynamic routing), render cards only for the tools the
+    model can actually see, in registry order. The cards repeat the tool
+    schemas, so cards for hidden tools only cost prompt tokens. Without it,
+    render every registered tool (full routing). The catalog parity check
+    always covers the whole registry.
+    """
     from core.code_tools import CODE_TOOL_REGISTRY
 
     catalog = load_tool_calling_skills(root)
@@ -131,11 +141,21 @@ def render_tool_calling_skills(root: Path | None = None) -> str:
             details.append("extra=" + ",".join(extra))
         return "# Tool-Calling Skills\n\nCATALOG ERROR: " + "; ".join(details)
 
-    lines = [
-        f"# Tool-Calling Skills ({len(registered_names)}/{len(registered_names)})",
-        "All registered tools are visible. Call the dedicated tool directly; do not invent tool names.",
-    ]
-    for name in registered_names:
+    if tool_names is None:
+        shown = registered_names
+        lines = [
+            f"# Tool-Calling Skills ({len(registered_names)}/{len(registered_names)})",
+            "All registered tools are visible. Call the dedicated tool directly; do not invent tool names.",
+        ]
+    else:
+        wanted = set(tool_names)
+        shown = [name for name in registered_names if name in wanted]
+        lines = [
+            f"# Tool-Calling Skills ({len(shown)}/{len(registered_names)})",
+            "These are the tools visible now. Call them directly; do not invent tool names. "
+            "To use another registered tool, call request_tool with its exact name.",
+        ]
+    for name in shown:
         skill = catalog[name]
         rules = "; ".join(skill.rules)
         lines.append(
@@ -167,7 +187,11 @@ def build_code_plan_prompt(tool_names: list[str] | tuple[str, ...] = ()) -> str:
     return prompt.replace("{{TOOL_NAMES}}", names)
 
 
-def build_coding_system_prompt(task: str = "", root: Path | None = None) -> str:
+def build_coding_system_prompt(
+    task: str = "",
+    root: Path | None = None,
+    tool_names: list[str] | tuple[str, ...] | None = None,
+) -> str:
     """Build the system prompt from the maintained base prompt and active skills."""
     sections = [_base_system_prompt()]
     active = select_coding_skills(task, root)
@@ -180,7 +204,7 @@ def build_coding_system_prompt(task: str = "", root: Path | None = None) -> str:
             .replace("{{PYTHON_EXECUTABLE}}", str(resolve_python_interpreter(BASE)))
         )
         sections.append(f"## {skill.name}\n\n{body}")
-    tool_skills = render_tool_calling_skills(root)
+    tool_skills = render_tool_calling_skills(root, tool_names)
     if tool_skills:
         sections.append(tool_skills)
     prompt = "\n\n".join(section for section in sections if section).strip()

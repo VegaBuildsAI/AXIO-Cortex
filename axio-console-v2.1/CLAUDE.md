@@ -40,10 +40,10 @@ py axio.py --claude <mode>               # force Claude for the session (FORCE_C
 LOCAL_ONLY=1 py axio.py <mode>           # 100% on-device
 py -m pytest tests -q                    # test suite (145 tests)
 ```
-In-mode: `plan <task>` / `execute` (Code) · `model <sonnet|opus> [effort]` · `memory` · `clear` · `help` · `exit`.
+In-mode: `plan <task>` / `execute` (Code) · `auto on|all|off` (tool approvals: on = commands run without asking, delete/push still ask; all = never ask; Chat uses `/auto`) · `model <sonnet|opus> [effort]` · `memory` · `clear` · `help` · `exit`.
 
 ## Environment (`.env`; defaults in `core/config.py`)
-`ANTHROPIC_API_KEY` (req) · `CLAUDE_MODEL=claude-sonnet-4-6` · `CLAUDE_MODEL_CHAT=claude-haiku-4-5-20251001` · `CLAUDE_MAX_TOKENS=16000` · `CLAUDE_EFFORT=high` · `LOCAL_ONLY` · `OLLAMA_HOST=127.0.0.1:11434` · `MODEL_*` (all default `gemma4:12b`) · `MEMORY_SUMMARY_MODEL=gemma4:12b` · `MEMORY_EMBED_MODEL=nomic-embed-text:latest` (768-dim, **do not change**) · `AXIO_MEMORY_BACKEND` (default `json`; `postgres` for live Cortex) · `AXIO_DB_*` (axio_cortex@127.0.0.1:5432) · `AXIO_SEARXNG_URL=127.0.0.1:8080`.
+`ANTHROPIC_API_KEY` (req) · `CLAUDE_MODEL=claude-sonnet-4-6` · `CLAUDE_MODEL_CHAT=claude-haiku-4-5-20251001` · `CLAUDE_MAX_TOKENS=16000` · `CLAUDE_EFFORT=high` · `LOCAL_ONLY` · `OLLAMA_HOST=127.0.0.1:11434` · `MODEL_*` (all default `gemma4:12b`) · `MEMORY_SUMMARY_MODEL=gemma4:12b` · `MEMORY_EMBED_MODEL=nomic-embed-text:latest` (768-dim, **do not change**) · `AXIO_MEMORY_BACKEND` (default `json`; `postgres` for live Cortex) · `AXIO_DB_*` (axio_cortex@127.0.0.1:5432) · `AXIO_SEARXNG_URL=127.0.0.1:8080` · `AXIO_AUTO_APPROVE=off|on|all` (starting approval mode; `core/approval.py`) · `AXIO_CODE_TOOL_ROUTING_MODE=auto|full|dynamic` (default `auto`: local runs see a stable ~8-tool subset plus tools they request, Claude sees all; Code prints `tools: N/total`) · `OLLAMA_KEEP_ALIVE_INTERACTIVE=-1` (Chat/Cowork/Code keep the model loaded while open and unload it on exit; background jobs keep Ollama's 5-min default).
 
 ## Do NOT
 - Hardcode constants outside `core/config.py`; edit `rev_agent.py`'s system prompt; remove `modes/gemma_code.py` (shim used by `tests/test_coding_skills.py`); change `MEMORY_EMBED_MODEL` (breaks the 768-dim vector store); trust May-era docs (`CHANGES.md`, `FIXES_SUMMARY.md`, `IMPROVEMENTS.md`) for current state.

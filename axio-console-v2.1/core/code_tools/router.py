@@ -209,8 +209,19 @@ class LoopGuard:
         return self.interventions >= self.max_interventions
 
 
+MAX_DYNAMIC_GRANTS = 4  # tools the model can add to its set via request_tool
+
+
 class DynamicToolRouter:
-    """Classify each step while supporting full or experimental bounded visibility."""
+    """Full visibility, or a stable bounded subset per task (dynamic).
+
+    In dynamic mode the subset is chosen once, from the task's initial
+    classification, and afterwards only grows when the model asks for a tool
+    (request_tool, or calling a hidden tool directly). It never swaps tools on
+    its own: changing the tool block changes the start of the prompt, which
+    makes Ollama re-read the whole prompt instead of reusing its cache.
+    task_type is still re-classified each step for logs and trajectories.
+    """
 
     def __init__(
         self,
@@ -235,6 +246,10 @@ class DynamicToolRouter:
         self.recent_observations: deque[str] = deque(maxlen=3)
         self.task_type = classify_task(prompt)
         self.active_names: tuple[str, ...] = ()
+        self._base_names: tuple[str, ...] = ()
+        if self.visibility == "dynamic":
+            base = self.registry.get_subset(self.task_type, self.budget - 1, self.preferred_names)
+            self._base_names = tuple(tool.name for tool in base)
 
     def observe(self, observation: str) -> None:
         self.recent_observations.append(observation)
@@ -245,8 +260,8 @@ class DynamicToolRouter:
             subset = list(self.registry.tools)
             self.active_names = tuple(tool.name for tool in subset)
             return self.registry.emit_subset(subset, provider)
-        include = [*self.granted_names, *self.preferred_names]
-        subset = self.registry.get_subset(self.task_type, self.budget - 1, include)
+        names = [*self._base_names, *(n for n in self.granted_names if n not in self._base_names)]
+        subset = [tool for tool in (self.registry.get(name) for name in names) if tool is not None]
         self.active_names = tuple(tool.name for tool in subset)
         schemas = self.registry.emit_subset(subset, provider)
         if provider.lower() == "ollama":
@@ -282,16 +297,24 @@ class DynamicToolRouter:
                 return f"ERROR: request_tool rejected unknown registered tool '{requested}'"
             self._grant(requested)
             return f"[HARNESS] Tool '{requested}' validated and will be exposed next step. Reason: {reason or 'not supplied'}"
-        if self.registry.get(name) is not None and name not in self.active_names:
+        tool = self.registry.get(name)
+        if tool is not None and name not in self.active_names:
             self._grant(name)
-            return f"[HARNESS] Registered tool '{name}' was outside the active subset and will be exposed next step; call it again then."
+            if tool.risk in {"destructive", "external"}:
+                # Never run a delete/push/PR the model could not see: show the
+                # schema next step and make it call again deliberately.
+                return f"[HARNESS] Registered tool '{name}' was outside the active subset and will be exposed next step; call it again then."
+            # Read/write/execute tools run now (the approval gate still applies)
+            # and stay visible, instead of costing a whole model step.
+            return None
         return None
 
     def _grant(self, name: str) -> None:
-        if name not in self.granted_names:
-            self.granted_names.append(name)
-        maximum_grants = max(1, self.budget - 5)
-        self.granted_names = self.granted_names[-maximum_grants:]
+        if name in self._base_names or name in self.granted_names:
+            return
+        self.granted_names.append(name)
+        # Bounded growth: beyond the cap, the oldest grant gives up its slot.
+        self.granted_names = self.granted_names[-MAX_DYNAMIC_GRANTS:]
 
 
 class TrajectoryLogger:

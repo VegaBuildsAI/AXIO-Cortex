@@ -55,6 +55,21 @@ class ToolRouterTests(unittest.TestCase):
             self.assertLessEqual(len(names), 7)
             self.assertTrue(core <= names)
 
+    def test_code_edit_subset_can_write_and_verify(self):
+        # Build tasks must be able to edit, write, and run their compile/self-test
+        # commands without spending a step on request_tool.
+        registry = build_default_registry()
+        router = DynamicToolRouter(
+            registry,
+            "Read the loaded spec and implement it end to end until SELFTEST OK",
+            budget=8,
+            visibility="dynamic",
+        )
+        router.schemas("ollama")
+        self.assertEqual(router.task_type, TaskType.CODE_EDIT)
+        self.assertTrue({"edit_file", "write_file", "run_command"} <= set(router.exposed_names))
+        self.assertEqual(len(router.exposed_names), 8)
+
     def test_request_tool_is_synthetic_and_grants_hidden_registered_tool(self):
         registry = build_default_registry()
         router = DynamicToolRouter(registry, "research official docs", budget=8, visibility="dynamic")
@@ -71,7 +86,43 @@ class ToolRouterTests(unittest.TestCase):
         second_names = {item["function"]["name"] for item in router.schemas("ollama")}
         self.assertIn("validated", result)
         self.assertIn(hidden, second_names)
-        self.assertLessEqual(len(second_names), 8)
+        # The set grows by the granted tool; nothing already visible is dropped.
+        self.assertEqual(second_names, first_names | {hidden})
+
+    def test_dynamic_set_is_stable_when_observations_change_task_type(self):
+        # Re-classification (e.g. a Traceback -> DEBUGGING) must not swap tools:
+        # a changed tool block makes Ollama re-read the whole prompt.
+        registry = build_default_registry()
+        router = DynamicToolRouter(registry, "implement a Python module", budget=8, visibility="dynamic")
+        router.schemas("ollama")
+        first = router.exposed_names
+        router.observe("Traceback (most recent call last): ERROR failed")
+        router.schemas("ollama")
+        self.assertEqual(router.task_type, TaskType.DEBUGGING)
+        self.assertEqual(router.exposed_names, first)
+
+    def test_grants_are_bounded(self):
+        from core.code_tools.router import MAX_DYNAMIC_GRANTS
+
+        registry = build_default_registry()
+        router = DynamicToolRouter(registry, "implement a Python module", budget=8, visibility="dynamic")
+        router.schemas("ollama")
+        base = set(router.active_names)
+        extra = [tool.name for tool in registry.tools if tool.name not in base]
+        for name in extra[: MAX_DYNAMIC_GRANTS + 2]:
+            router.handle_unavailable_call("request_tool", {"name": name, "reason": "test"})
+        router.schemas("ollama")
+        self.assertTrue(base <= set(router.active_names))
+        self.assertEqual(len(router.active_names), len(base) + MAX_DYNAMIC_GRANTS)
+
+    def test_hidden_execute_tool_runs_immediately_and_stays_visible(self):
+        registry = build_default_registry()
+        router = DynamicToolRouter(registry, "implement a Python module", budget=8, visibility="dynamic")
+        router.schemas("ollama")
+        self.assertNotIn("run_python", router.active_names)
+        self.assertIsNone(router.handle_unavailable_call("run_python", {"script_path": "x.py"}))
+        router.schemas("ollama")
+        self.assertIn("run_python", router.active_names)
 
     def test_unexposed_registered_call_is_reselected_without_execution(self):
         registry = build_default_registry()

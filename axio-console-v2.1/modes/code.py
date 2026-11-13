@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core import claude_runtime, pricing
+from core.approval import announce, auto_approves, get_level, handle_auto_command
 from core.code_tools import CODE_TOOL_REGISTRY, summarize_arguments
 from core.code_tools.router import (
     DynamicToolRouter,
@@ -30,10 +31,11 @@ from core.console_input import capture_summary, is_multiline_command, read_multi
 from core.config import (
     INPUT_MAX_CHARS,
     CODE_PYTHON_TIMEOUT,
-    CODE_TOOL_ROUTING_MODE,
     LOCAL_ONLY,
     MODELS,
+    OLLAMA_KEEP_ALIVE_INTERACTIVE,
     TEXT_EXTENSIONS,
+    routing_mode_for,
 )
 from core.file_context import SESSION_CONTEXT
 from core.logger import AuditLogger
@@ -45,8 +47,9 @@ from harness.planner import run_orchestrated
 
 # One registry is the source of truth for both backends and every local-model alias.
 CODE_TOOLS = CODE_TOOL_REGISTRY
-# Full schemas remain the default runtime policy. The dynamic subset mode is
-# retained behind AXIO_CODE_TOOL_ROUTING_MODE=dynamic for controlled experiments.
+# Tool visibility comes from routing_mode_for(provider): with the default
+# AXIO_CODE_TOOL_ROUTING_MODE=auto, local runs see a small dynamic subset (fewer
+# prompt tokens on a slow iGPU) and Claude sees every schema (prompt-cached).
 TOOLS = CODE_TOOLS.ollama_schemas()
 TOOLS_CLAUDE = CODE_TOOLS.claude_schemas()
 TOOL_MAP = CODE_TOOLS.handler_map
@@ -54,6 +57,9 @@ TOOL_VISIBILITY_BUDGET = 8
 
 
 def _approve_tool(tool, args: dict) -> bool:
+    if auto_approves(tool):
+        announce(tool, summarize_arguments(args))
+        return True
     print(f"\n  {YELLOW}[AGENT] Requests {tool.risk} tool: {tool.name}{RESET}")
     print(f"  {lo('  ' + summarize_arguments(args))}")
     if tool.risk == "destructive":
@@ -268,21 +274,27 @@ def _run_ollama_agent(
 ) -> str:
     scoped_task = task_scope or task
     CODE_TOOLS.start_task(scoped_task, _active_workspace_roots())
+    routing = routing_mode_for("ollama")
     router = DynamicToolRouter(
         CODE_TOOLS,
         scoped_task,
         budget=TOOL_VISIBILITY_BUDGET,
-        visibility=CODE_TOOL_ROUTING_MODE,
+        visibility=routing,
     )
     guard = LoopGuard()
     trajectory = TrajectoryLogger("code-ollama")
     max_steps = step_budget(scoped_task)
-    messages = [{"role": "system", "content": build_coding_system_prompt(task)}]
+    # Resolve the visible tools first so the system prompt carries cards only
+    # for them. The prompt is built once per task and stays byte-identical
+    # across steps, which lets Ollama reuse its prompt cache.
+    router.schemas("ollama")
+    card_names = router.active_names if routing == "dynamic" else None
+    messages = [{"role": "system", "content": build_coding_system_prompt(task, tool_names=card_names)}]
     messages.extend(image_messages or [])
     messages.append({"role": "user", "content": task})
     print(
-        f"\n  {lo(f'model: {model} | tools: {len(CODE_TOOLS.tools)}/{len(CODE_TOOLS.tools)} '
-        f'| routing: {CODE_TOOL_ROUTING_MODE} | complexity: {classify_complexity(scoped_task)} '
+        f"\n  {lo(f'model: {model} | tools: {len(router.active_names)}/{len(CODE_TOOLS.tools)} '
+        f'| routing: {routing} | complexity: {classify_complexity(scoped_task)} '
         f'| max steps: {max_steps}')}\n"
     )
     started = time.time()
@@ -415,15 +427,17 @@ def _run_claude_agent(
 ) -> str:
     scoped_task = task_scope or task
     CODE_TOOLS.start_task(scoped_task, _active_workspace_roots())
+    routing = routing_mode_for("claude")
     router = DynamicToolRouter(
         CODE_TOOLS,
         scoped_task,
         budget=TOOL_VISIBILITY_BUDGET,
-        visibility=CODE_TOOL_ROUTING_MODE,
+        visibility=routing,
     )
     guard = LoopGuard()
     trajectory = TrajectoryLogger("code-claude")
     max_steps = step_budget(scoped_task)
+    router.schemas("claude")  # resolve the visible set for the status line
     system_prompt = build_coding_system_prompt(task)
     messages = [{"role": "user", "content": task}]
     usage = {}
@@ -433,7 +447,7 @@ def _run_claude_agent(
     model = claude_runtime.get_model()
     print(
         f"\n  {lo(f'model: {claude_runtime.describe()} (Claude API) | '
-        f'tools: {len(CODE_TOOLS.tools)}/{len(CODE_TOOLS.tools)} | routing: {CODE_TOOL_ROUTING_MODE} | '
+        f'tools: {len(router.active_names)}/{len(CODE_TOOLS.tools)} | routing: {routing} | '
         f'complexity: {classify_complexity(scoped_task)} | max steps: {max_steps}')}\n"
     )
 
@@ -596,6 +610,7 @@ HELP = f"""
   {YELLOW}model <name>{RESET}       Local: select Ollama model; cloud: select Claude alias/id
   {YELLOW}effort <level>{RESET}     Claude effort: low, medium, high, xhigh, max
   {YELLOW}steps <n>{RESET}          Force agent step budget (1-200); {YELLOW}steps auto{RESET} to reset
+  {YELLOW}auto on|all|off{RESET}    Tool approvals: on = run commands without asking (delete/push still ask); all = never ask; off = ask
   {YELLOW}memory status{RESET}      Show Code memory backend status
   {YELLOW}clear{RESET}              Clear approved plan and attached images
   {YELLOW}help{RESET} / {YELLOW}exit{RESET}
@@ -604,7 +619,7 @@ HELP = f"""
 
 def run(force_claude_session: bool = False) -> None:
     mode_banner("code", f"Unified coding agent  |  {len(TOOLS)} tools  |  Plan Mode  |  agents  |  verification gate")
-    ollama = OllamaClient()
+    ollama = OllamaClient(keep_alive=OLLAMA_KEEP_ALIVE_INTERACTIVE)
     logger = AuditLogger("code")
     memory = ModeMemorySession("code")
     model = MODELS["coding"]
@@ -639,6 +654,8 @@ def run(force_claude_session: bool = False) -> None:
             labels.append("Plan approved")
         if SESSION_CONTEXT.count:
             labels.append(f"{SESSION_CONTEXT.count} files")
+        if get_level() != "off":
+            labels.append("auto" if get_level() == "on" else "auto all")
         try:
             task = input(f"  {YELLOW}CODE›{RESET} {lo('[' + ' | '.join(labels) + ']')} ").strip()
         except (KeyboardInterrupt, EOFError):
@@ -739,6 +756,10 @@ def run(force_claude_session: bool = False) -> None:
             selected = claude_runtime.set_effort(command.split(maxsplit=1)[1])
             print(f"  {ok(f'Effort: {selected}')}\n" if selected else f"  {warn(claude_runtime.options())}\n")
             continue
+        auto_reply = handle_auto_command(command)
+        if auto_reply is not None:
+            print(f"  {ok(auto_reply)}\n")
+            continue
         if command == "steps" or command.startswith("steps "):
             parts = task.split(maxsplit=1)
             arg = parts[1].strip() if len(parts) > 1 else ""
@@ -820,3 +841,7 @@ def run(force_claude_session: bool = False) -> None:
         if result.startswith(("Ollama error:", "Claude error:")):
             print(f"  {err(result)}\n")
         memory.record_assistant(result, model=active_model, metadata=metadata)
+
+    # Free the model(s) this session kept loaded (keep_alive=-1), so the
+    # ~8 GB of shared GPU memory is released when the mode closes.
+    ollama.unload_kept()

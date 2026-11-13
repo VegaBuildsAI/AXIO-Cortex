@@ -36,6 +36,11 @@ def resolve_tools(names: Sequence[str]) -> list:
 
 def interactive_approver(tool, args: dict) -> bool:
     """Default terminal approval gate, matching Code mode's conventions."""
+    from core.approval import announce, auto_approves
+
+    if auto_approves(tool):
+        announce(tool, summarize_arguments(args))
+        return True
     print(f"\n  [tool] requests {tool.risk} tool: {tool.name}")
     print(f"    {summarize_arguments(args)}")
     try:

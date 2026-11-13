@@ -14,6 +14,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from core.approval import announce, auto_approves, get_level, handle_auto_command
+from core.approval import describe as describe_auto
 from core.code_tools import build_default_registry, summarize_arguments
 from core.code_tools.finance_tools import build_finance_tools
 from core.code_tools.router import (
@@ -1207,9 +1209,12 @@ def tool_list_outputs() -> str:
 def tool_run_command(command: str, working_dir: str = None) -> str:
     print(f"\n  \033[33m[AGENT] Wants to run:\033[0m")
     print(f"  \033[90m  {command}\033[0m")
-    confirm = input("  Allow? (y/n): ").strip().lower()
-    if confirm != "y":
-        return "CANCELLED: User declined."
+    if get_level() == "off":
+        confirm = input("  Allow? (y/n): ").strip().lower()
+        if confirm != "y":
+            return "CANCELLED: User declined."
+    else:
+        print("  [auto-approved execute] run_command")
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-Command", command],
@@ -1244,6 +1249,9 @@ TOOL_MAP = {
 }
 
 def _approve_registry_tool(tool, args: dict) -> bool:
+    if auto_approves(tool):
+        announce(tool, summarize_arguments(args))
+        return True
     print(f"\n  \033[33m[AGENT] Requests {tool.risk} tool: {tool.name}\033[0m")
     print(f"  \033[90m  {summarize_arguments(args)}\033[0m")
     if tool.risk == "destructive":
@@ -1836,6 +1844,7 @@ HELP_TEXT = """
 \033[1mOther commands:\033[0m
   tools        list all available tools
   outputs      list files created in this session
+  auto on|all|off  tool approvals (on: no asking, delete/push still ask)
   model <name> switch model (default: gemma4:12b)
   help         show this message
   exit         quit
@@ -1915,6 +1924,8 @@ def main():
             break
         elif lower == "help":
             print(HELP_TEXT)
+        elif handle_auto_command(lower) is not None:
+            print(f"  {describe_auto()}\n")
         elif lower == "tools":
             print("\n\033[1mAvailable tools:\033[0m")
             for t in TOOLS:
