@@ -78,7 +78,7 @@ Claude-like context without holding everything in the window.
 AXIO Cortex is the evolution into a system with **live, persistent memory**
 backed by a Docker **Postgres + pgvector** database — container
 **`axio-cortex-postgres`** (compose project `axiomodelimprovement`), db
-`axio_cortex`, published on the standard **127.0.0.1:5432**. Selected with `AXIO_MEMORY_BACKEND=postgres`; JSON is the fallback.
+`axio_cortex`, published on **127.0.0.1:5433** (5432 is taken by `axio-clinical-db`). Selected with `AXIO_MEMORY_BACKEND=postgres`; JSON is the fallback.
 Postgres is the system of record: sessions, messages, facts, and embeddings
 persist with foreign-key links. chat/cowork/code share memory and recall from
 each other and from `console`; RevRec stays isolated. Loading knowledge is a
@@ -133,4 +133,4 @@ Windows + Python (`py`). Local models via Ollama at 127.0.0.1:11434:
 **gemma4:12b** (base) and **nomic-embed-text:latest** (embedder). Cloud:
 Anthropic Claude API — `claude-sonnet-4-6` (default) and `claude-opus-4-8`
 (frontier), switchable in-app. Database: pgvector/pgvector:pg16 via Docker
-Compose on 127.0.0.1:5432. Repo: VegaBuildsAI/AXIO-Cortex.
+Compose on 127.0.0.1:5433. Repo: VegaBuildsAI/AXIO-Cortex.

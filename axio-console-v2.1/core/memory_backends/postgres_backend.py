@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Callable
 
+from core.config import MEMORY_IVFFLAT_PROBES
 from core.db import connect
 
 
@@ -396,36 +397,54 @@ class PostgresMemoryBackend:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def recall(self, embedding: list[float], n_results: int, modes: list[str] = None):
+    def recall(
+        self,
+        embedding: list[float],
+        n_results: int,
+        modes: list[str] = None,
+        source_types: list[str] = None,
+    ):
         if len(embedding) != 768:
             raise ValueError(
                 f"Expected embedding dimension 768, got {len(embedding)}"
             )
         if modes:
-            sql = """
-                SELECT content, metadata, embedding <=> %s::vector AS distance
-                FROM memory_embeddings
-                WHERE mode = ANY(%s)
-                  AND NOT (metadata ? 'superseded_by')
-                ORDER BY embedding <=> %s::vector
-                LIMIT %s
-                """
-            params = (embedding, modes, embedding, n_results)
+            mode_clause = "mode = ANY(%s)"
+            mode_param = modes
         else:
-            sql = """
-                SELECT content, metadata, embedding <=> %s::vector AS distance
+            mode_clause = "mode = %s"
+            mode_param = self.mode
+        source_clause = ""
+        source_params: tuple = ()
+        if source_types:
+            source_clause = "\n                  AND source_type = ANY(%s)"
+            source_params = (list(source_types),)
+        sql = f"""
+                SELECT content, metadata, source_type, embedding <=> %s::vector AS distance
                 FROM memory_embeddings
-                WHERE mode = %s
-                  AND NOT (metadata ? 'superseded_by')
+                WHERE {mode_clause}
+                  AND NOT (metadata ? 'superseded_by'){source_clause}
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
                 """
-            params = (embedding, self.mode, embedding, n_results)
+        params = (embedding, mode_param, *source_params, embedding, n_results)
 
         with self._connection() as conn:
+            # Probe every ivfflat list so the index scan returns the exact top-k.
+            # set_config(..., true) is transaction-local, like SET LOCAL, but
+            # accepts a bound parameter. Same transaction as the SELECT below.
+            conn.execute(
+                "SELECT set_config('ivfflat.probes', %s, true)",
+                (str(MEMORY_IVFFLAT_PROBES),),
+            )
             rows = conn.execute(sql, params).fetchall()
         return [
-            {"text": row["content"], "metadata": row["metadata"], "distance": row["distance"]}
+            {
+                "text": row["content"],
+                "metadata": row["metadata"],
+                "distance": row["distance"],
+                "source_type": row.get("source_type") if hasattr(row, "get") else None,
+            }
             for row in rows
         ]
 

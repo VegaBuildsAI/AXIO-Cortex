@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
 """
-Index Michael's Second Brain vault into AXIO Cortex for immediate recall.
+Import Michael's Second Brain vault into the AXIO Cortex (Postgres).
 
-Walks every .md file, splits large notes by `## ` sections (further splitting
-oversized bodies), embeds each chunk with nomic-embed-text, and stores it in the
-`console` memory namespace so EVERY mode (chat/cowork/code) recalls it via RAG.
+The Postgres Cortex is the one brain; the Obsidian vault is only an import
+source and is opened read-only. Every non-empty .md note (skipping .obsidian/,
+.git/) is split by `## ` sections, embedded with nomic-embed-text and stored in
+the `console` namespace as source_type `second_brain`, with `chunk_index`,
+`section_part` and `note_mtime` in each chunk's metadata so a note can be
+rebuilt in order from the DB (brain_read).
 
-Re-runnable / idempotent: deletes previous `second_brain` chunks before
-re-indexing, so you just run it again after editing your vault.
+Safety:
+  * Ollama is checked (a real 768-dim test embedding) BEFORE anything changes.
+  * Notes are replaced one at a time, and only after every chunk of that note
+    has been embedded. There is no clear-all: if Ollama dies mid-run, notes not
+    yet processed keep their previous chunks.
+  * Only source_type `second_brain` is touched; self_learned, memory_seed,
+    exemplar, session summaries and facts are never modified.
+  * Holds the self-memory single-writer lock, so it never races the scheduled
+    AXIO Memory Sync, and records note mtimes in the runtime state so that sync
+    does not redo the work.
 
-Usage (from axio-console-v2.1, with the Postgres Cortex container up):
-    py scripts/ingest_second_brain.py
-    py scripts/ingest_second_brain.py "C:/Users/AXIO/Documents/Second Brain"
+Usage (from axio-console-v2.1, with the Cortex container and Ollama up):
+    .venv\\Scripts\\python.exe scripts/ingest_second_brain.py
+    .venv\\Scripts\\python.exe scripts/ingest_second_brain.py "D:/other/vault"
 """
 from __future__ import annotations
 
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -26,93 +36,88 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.memory import MemoryManager   # noqa: E402
-from core.db import connect             # noqa: E402
-
-DEFAULT_VAULT = Path(r"C:\Users\AXIO\Documents\Second Brain")
-TARGET_MODE = "console"     # cross-mode master namespace -> all modes recall it
-SOURCE_TYPE = "second_brain"
-MAX_CHARS = 4000            # ~1k tokens per chunk keeps embeddings focused
-
-
-def chunks_for_file(text: str, rel: str, stem: str):
-    """Yield (heading, body) chunks for one markdown file."""
-    text = text.strip()
-    if not text:
-        return
-    raw = []
-    if re.search(r"^##\s+", text, flags=re.MULTILINE):
-        parts = re.split(r"^##\s+", text, flags=re.MULTILINE)
-        preamble = parts[0].strip()
-        if preamble:
-            raw.append(("(intro)", preamble))
-        for chunk in parts[1:]:
-            lines = chunk.splitlines()
-            heading = lines[0].strip() if lines else ""
-            body = "\n".join(lines[1:]).strip()
-            if body:
-                raw.append((heading, body))
-    else:
-        raw.append((stem, text))
-
-    for heading, body in raw:
-        if len(body) <= MAX_CHARS:
-            yield heading, body
-        else:
-            for i in range(0, len(body), MAX_CHARS):
-                yield heading, body[i:i + MAX_CHARS]
+from core import memory_runtime as runtime  # noqa: E402
+from core.config import (  # noqa: E402
+    SECOND_BRAIN_NAMESPACE,
+    SECOND_BRAIN_SOURCE_TYPE,
+    SECOND_BRAIN_VAULT,
+)
+from core.memory import MemoryManager  # noqa: E402
+from core.self_memory import SingleInstanceLock  # noqa: E402
 
 
 def main() -> int:
-    vault = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_VAULT
+    vault = Path(sys.argv[1]) if len(sys.argv) > 1 else SECOND_BRAIN_VAULT
     if not vault.exists():
         print(f"Vault not found: {vault}")
         return 1
 
-    mgr = MemoryManager(TARGET_MODE)
+    mgr = MemoryManager(SECOND_BRAIN_NAMESPACE)
     if not mgr._postgres_backend:
-        print("WARNING: Postgres backend not active. Start the Cortex container and "
-              "set AXIO_MEMORY_BACKEND=postgres, then re-run.")
+        print("ABORT: Postgres backend not active. Start the Cortex container and "
+              "set AXIO_MEMORY_BACKEND=postgres. Nothing was changed.")
+        return 1
+    try:
+        mgr._postgres_backend.healthcheck()
+    except Exception as exc:
+        print(f"ABORT: Postgres Cortex unavailable ({exc}). Nothing was changed.")
         return 1
 
-    # Idempotent: clear previous Second Brain chunks before re-indexing.
-    with connect() as conn:
-        conn.execute(
-            "DELETE FROM memory_embeddings WHERE mode = %s AND source_type = %s",
-            (TARGET_MODE, SOURCE_TYPE),
-        )
-        conn.commit()
-    print(f"Cleared previous '{SOURCE_TYPE}' chunks from namespace '{TARGET_MODE}'.")
+    probe = mgr.embed_text("AXIO Second Brain import probe")
+    if not probe or len(probe) != 768:
+        print("ABORT: Ollama embeddings unavailable (nomic-embed-text, 768-dim). "
+              "Start Ollama and re-run. Nothing was changed.")
+        return 1
 
-    files = sorted(vault.rglob("*.md"))
-    stored = 0
-    skipped = 0
-    for path in files:
+    lock = SingleInstanceLock()
+    if not lock.acquire():
+        print("ABORT: another Cortex writer (memory runtime) holds the lock. "
+              "Re-run when it finishes. Nothing was changed.")
+        return 1
+    try:
+        return _import(mgr, vault)
+    finally:
+        lock.release()
+
+
+def _import(mgr: MemoryManager, vault: Path) -> int:
+    notes = list(runtime.iter_vault_notes(vault))
+    use_state = vault.resolve() == Path(runtime.VAULT).resolve()
+    state = runtime._load_state() if use_state else None
+    files = state.setdefault("files", {}) if state is not None else {}
+
+    stored = ok = failed = 0
+    for path, rel in notes:
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            skipped += 1
+            n = runtime._ingest(mgr, path, SECOND_BRAIN_SOURCE_TYPE, "path", rel, rel, "Second Brain")
+        except Exception as exc:
+            failed += 1
+            print(f"  ! {rel}: not replaced, previous chunks kept ({exc})")
             continue
-        rel = path.relative_to(vault).as_posix()
-        for heading, body in chunks_for_file(content, rel, path.stem):
-            text = f"[Second Brain] {rel} — {heading}:\n{body}"
-            try:
-                mgr.store_chunk(text, metadata={
-                    "source_type": SOURCE_TYPE, "path": rel, "title": heading,
-                })
-                stored += 1
-            except Exception as exc:   # keep going on a single bad chunk
-                skipped += 1
-                print(f"  ! skip {rel} [{heading}]: {exc}")
+        ok += 1
+        stored += n
+        files["brain::" + rel] = path.stat().st_mtime
+        print(f"  imported {rel} ({n} chunks)")
 
-    mgr.update_facts({"notes": [
-        f"Second Brain vault indexed for recall: {len(files)} files -> {stored} chunks "
-        f"(source '{SOURCE_TYPE}', namespace '{TARGET_MODE}')."
-    ]})
+    # Notes deleted from the vault: drop their chunks (note by note).
+    vault_rels = {rel for _path, rel in notes}
+    removed = 0
+    for row in mgr._postgres_backend.list_chunks(SECOND_BRAIN_SOURCE_TYPE, limit=100000):
+        rel = (row.get("metadata") or {}).get("path")
+        if rel and rel not in vault_rels:
+            mgr.delete_chunks(SECOND_BRAIN_SOURCE_TYPE, "path", rel)
+            vault_rels.add(rel)  # delete each orphan path once
+            files.pop("brain::" + rel, None)
+            removed += 1
+            print(f"  removed {rel} (no longer in vault)")
 
-    print(f"\nIndexed {stored} chunks from {len(files)} files (skipped {skipped}).")
-    print(f"Stats ({TARGET_MODE}):", mgr.stats())
-    return 0
+    if state is not None:
+        runtime._save_state(state)
+
+    print(f"\nImported {ok}/{len(notes)} notes -> {stored} chunks; "
+          f"{failed} failed (kept previous version); {removed} removed.")
+    print(f"Stats ({SECOND_BRAIN_NAMESPACE}):", mgr.stats())
+    return 0 if failed == 0 else 2
 
 
 if __name__ == "__main__":

@@ -160,6 +160,32 @@ MEMORY_SUMMARY_MODEL  = os.getenv("MEMORY_SUMMARY_MODEL", "gemma4:12b")
 # models above and is never routed through MODELS / the chat endpoints.
 MEMORY_EMBED_MODEL    = os.getenv("MEMORY_EMBED_MODEL",   "nomic-embed-text:latest")
 
+# Exact pgvector recall. memory_embeddings carries an ivfflat index (lists=100);
+# with Postgres' default probes=1 it misses most of the true top-k on a small
+# table. Probing every list (100) makes the index scan exact.
+MEMORY_IVFFLAT_PROBES = int(os.getenv("MEMORY_IVFFLAT_PROBES", "100"))
+
+# ---------------------------------------------------------
+#  SECOND BRAIN (Obsidian vault -> Postgres Cortex import)
+# ---------------------------------------------------------
+# The vault is a read-only IMPORT SOURCE. Its notes are loaded into Postgres
+# (mode `console`, source_type `second_brain`); at runtime models read Postgres
+# only, never the vault files.
+SECOND_BRAIN_VAULT = Path(
+    os.getenv("SECOND_BRAIN_VAULT", r"C:\Users\AXIO\Documents\Second Brain")
+).expanduser()
+SECOND_BRAIN_SOURCE_TYPE = "second_brain"
+SECOND_BRAIN_NAMESPACE   = "console"
+SECOND_BRAIN_SKIP_DIRS   = (".obsidian", ".git", ".trash")
+# Dedicated `=== SECOND BRAIN ===` prompt section, separate from the general
+# MEMORY_RECALL_RESULTS slots so vault notes are not crowded out.
+MEMORY_BRAIN_RECALL_RESULTS = int(os.getenv("MEMORY_BRAIN_RECALL_RESULTS", "4"))
+MEMORY_BRAIN_CHUNK_CHARS    = int(os.getenv("MEMORY_BRAIN_CHUNK_CHARS", "1500"))
+# brain_search / brain_read / brain_list read the shared Cortex namespaces only.
+# revrec is isolated and is never searched by the brain tools.
+BRAIN_TOOL_MODES     = ("chat", "cowork", "code", "console")
+BRAIN_READ_MAX_CHARS = int(os.getenv("BRAIN_READ_MAX_CHARS", "40000"))
+
 # ---------------------------------------------------------
 #  LIVE DATABASE BACKEND
 # ---------------------------------------------------------

@@ -24,7 +24,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .config import AXIO_DATA_ROOT, MODELS
+from .config import (
+    AXIO_DATA_ROOT,
+    MODELS,
+    SECOND_BRAIN_NAMESPACE,
+    SECOND_BRAIN_SKIP_DIRS,
+    SECOND_BRAIN_SOURCE_TYPE,
+    SECOND_BRAIN_VAULT,
+)
 from .db import connect
 from .logger import AuditLogger
 from .memory import MemoryManager
@@ -38,7 +45,7 @@ from .self_memory import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-VAULT = Path(r"C:\Users\AXIO\Documents\Second Brain")
+VAULT = SECOND_BRAIN_VAULT  # read-only import source; see core/config.py
 # Canonical AXIO knowledge docs — kept in sync in the Cortex (Docker Postgres).
 SEED_DOCS = [
     ROOT / "AXIO_CORTEX_MEMORY.md",              # identity + hybrid architecture
@@ -66,7 +73,8 @@ def _save_state(state: dict) -> None:
 
 
 # ── chunking ─────────────────────────────────────────────────────────────
-def _split_sections(text: str, stem: str):
+def _split_sections_parts(text: str, stem: str):
+    """Return (heading, body, section_part) chunks; part>0 = continuation slice."""
     text = text.strip()
     if not text:
         return []
@@ -86,11 +94,35 @@ def _split_sections(text: str, stem: str):
     out = []
     for heading, body in raw:
         if len(body) <= MAX_CHARS:
-            out.append((heading, body))
+            out.append((heading, body, 0))
         else:
-            for i in range(0, len(body), MAX_CHARS):
-                out.append((heading, body[i:i + MAX_CHARS]))
+            for part, i in enumerate(range(0, len(body), MAX_CHARS)):
+                out.append((heading, body[i:i + MAX_CHARS], part))
     return out
+
+
+def _split_sections(text: str, stem: str):
+    return [(heading, body) for heading, body, _part in _split_sections_parts(text, stem)]
+
+
+def iter_vault_notes(vault: Path = None):
+    """Yield (path, rel) for every non-empty note, skipping .obsidian/.git.
+
+    The vault is only read here; nothing in AXIO writes to it.
+    """
+    vault = Path(vault or VAULT)
+    if not vault.exists():
+        return
+    for path in sorted(vault.rglob("*.md")):
+        rel_parts = path.relative_to(vault).parts
+        if any(part in SECOND_BRAIN_SKIP_DIRS for part in rel_parts[:-1]):
+            continue
+        try:
+            if not path.is_file() or path.stat().st_size == 0:
+                continue
+        except OSError:
+            continue
+        yield path, path.relative_to(vault).as_posix()
 
 
 def _delete_chunks(mgr: MemoryManager, source_type: str, key: str, value: str) -> None:
@@ -98,20 +130,37 @@ def _delete_chunks(mgr: MemoryManager, source_type: str, key: str, value: str) -
     mgr.delete_chunks(source_type, key, value)
 
 
+class EmbeddingUnavailable(RuntimeError):
+    """Raised before any delete when a note cannot be fully embedded."""
+
+
 def _ingest(mgr, path: Path, source_type: str, del_key: str, del_val: str,
             path_meta: str, label: str) -> int:
-    """Delete this file's prior chunks then re-embed + insert its sections."""
-    _delete_chunks(mgr, source_type, del_key, del_val)
+    """Replace one file's chunks: embed every section FIRST, then swap.
+
+    If any embedding fails (Ollama down/mid-restart) nothing is deleted, so the
+    previous version of the note stays recallable and the next cycle retries.
+    Each chunk records its `chunk_index` (order within the note), its
+    `section_part` (continuation slice of an oversized section) and the file's
+    `note_mtime`, so brain_read can rebuild the note from Postgres alone.
+    """
     text = path.read_text(encoding="utf-8", errors="replace")
-    n = 0
-    for heading, body in _split_sections(text, path.stem):
-        mgr.store_chunk(
-            f"[{label}] {path_meta} — {heading}:\n{body}",
-            metadata={"source_type": source_type, "doc": path.name,
-                      "path": path_meta, "title": heading},
-        )
-        n += 1
-    return n
+    note_mtime = path.stat().st_mtime
+    prepared = []
+    for index, (heading, body, part) in enumerate(_split_sections_parts(text, path.stem)):
+        chunk_text = f"[{label}] {path_meta} — {heading}:\n{body}"
+        embedding = mgr.embed_text(chunk_text)
+        if not embedding:
+            raise EmbeddingUnavailable(f"embedding unavailable for {path_meta} [{heading}]")
+        prepared.append((chunk_text, embedding, {
+            "source_type": source_type, "doc": path.name, "path": path_meta,
+            "title": heading, "chunk_index": index, "section_part": part,
+            "note_mtime": note_mtime,
+        }))
+    _delete_chunks(mgr, source_type, del_key, del_val)
+    for chunk_text, embedding, metadata in prepared:
+        mgr.store_chunk(chunk_text, metadata=metadata, embedding=embedding)
+    return len(prepared)
 
 
 # ── job 1: file sync ─────────────────────────────────────────────────────
@@ -121,9 +170,8 @@ def _bootstrap(state: dict, log) -> None:
     for doc in SEED_DOCS:
         if doc.exists():
             files["seed::" + doc.name] = doc.stat().st_mtime
-    if VAULT.exists():
-        for p in VAULT.rglob("*.md"):
-            files["brain::" + p.relative_to(VAULT).as_posix()] = p.stat().st_mtime
+    for p, rel in iter_vault_notes():
+        files["brain::" + rel] = p.stat().st_mtime
     log("  bootstrapped state from existing index (no re-embed needed)")
 
 
@@ -134,12 +182,10 @@ def sync_files(mgr, state: dict, log) -> int:
                     if d.exists() and files.get("seed::" + d.name) != d.stat().st_mtime]
     vault_changed = []
     seen = set()
-    if VAULT.exists():
-        for p in sorted(VAULT.rglob("*.md")):
-            rel = p.relative_to(VAULT).as_posix()
-            seen.add("brain::" + rel)
-            if files.get("brain::" + rel) != p.stat().st_mtime:
-                vault_changed.append((p, rel))
+    for p, rel in iter_vault_notes():
+        seen.add("brain::" + rel)
+        if files.get("brain::" + rel) != p.stat().st_mtime:
+            vault_changed.append((p, rel))
     removed = [k for k in files if k.startswith("brain::") and k not in seen]
 
     if not (seed_changed or vault_changed or removed):
@@ -148,28 +194,101 @@ def sync_files(mgr, state: dict, log) -> int:
     # Embeddings need Ollama. If it's down, skip WITHOUT touching state or
     # deleting anything, so we retry cleanly next cycle (no data loss).
     if (seed_changed or vault_changed) and not OllamaClient().is_running():
-        log("  sync skipped (Ollama offline); will retry next cycle")
+        log(
+            "  SYNC SKIPPED: Ollama offline — "
+            f"{len(vault_changed)} Second Brain note(s), {len(seed_changed)} seed doc(s) "
+            f"and {len(removed)} removal(s) pending; the brain stays stale until "
+            "Ollama is running (will retry next cycle)"
+        )
         return 0
 
     changed = 0
+    failed = 0
     for doc in seed_changed:
-        n = _ingest(mgr, doc, "memory_seed", "doc", doc.name, doc.name, "AXIO")
+        try:
+            n = _ingest(mgr, doc, "memory_seed", "doc", doc.name, doc.name, "AXIO")
+        except Exception as exc:
+            failed += 1
+            log(f"  ! seed {doc.name} not synced (kept previous chunks): {exc}")
+            continue
         files["seed::" + doc.name] = doc.stat().st_mtime
         changed += 1
         log(f"  synced seed {doc.name} ({n} chunks)")
     for p, rel in vault_changed:
-        n = _ingest(mgr, p, "second_brain", "path", rel, rel, "Second Brain")
+        try:
+            n = _ingest(mgr, p, SECOND_BRAIN_SOURCE_TYPE, "path", rel, rel, "Second Brain")
+        except Exception as exc:
+            failed += 1
+            log(f"  ! brain {rel} not synced (kept previous chunks): {exc}")
+            continue
         files["brain::" + rel] = p.stat().st_mtime
         changed += 1
         log(f"  synced brain {rel} ({n} chunks)")
     for key in removed:
         rel = key[len("brain::"):]
-        _delete_chunks(mgr, "second_brain", "path", rel)
+        _delete_chunks(mgr, SECOND_BRAIN_SOURCE_TYPE, "path", rel)
         del files[key]
         changed += 1
         log(f"  removed brain {rel}")
+    if failed:
+        log(f"  {failed} file(s) left pending; will retry next cycle")
 
     return changed
+
+
+def brain_status(vault: Path = None) -> dict:
+    """Read-only comparison of the vault (import source) against Postgres.
+
+    Returns notes in vault vs imported, stale notes (missing, edited since
+    import, or imported before chunk_index existed), orphaned DB notes,
+    per-source chunk counts for the shared namespaces and last import time.
+    """
+    vault_notes = {rel: p.stat().st_mtime for p, rel in iter_vault_notes(vault)}
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT metadata->>'path' AS path,
+                   max((metadata->>'note_mtime')::float8) AS note_mtime,
+                   bool_and(metadata ? 'chunk_index') AS indexed,
+                   max(metadata->>'ts') AS imported_at,
+                   count(*) AS chunks
+            FROM memory_embeddings
+            WHERE mode = %s AND source_type = %s
+            GROUP BY 1
+            """,
+            (SECOND_BRAIN_NAMESPACE, SECOND_BRAIN_SOURCE_TYPE),
+        ).fetchall()
+        counts = conn.execute(
+            """
+            SELECT mode, source_type, count(*) AS count
+            FROM memory_embeddings
+            WHERE mode <> 'revrec'
+            GROUP BY 1, 2 ORDER BY 1, 2
+            """
+        ).fetchall()
+    imported = {row["path"]: row for row in rows if row["path"]}
+    stale = []
+    for rel, mtime in vault_notes.items():
+        row = imported.get(rel)
+        if row is None:
+            stale.append((rel, "not imported"))
+        elif not row["indexed"] or row["note_mtime"] is None:
+            stale.append((rel, "no chunk_index (pre-upgrade import)"))
+        elif abs(float(row["note_mtime"]) - mtime) > 0.001:
+            stale.append((rel, "edited since import"))
+    orphans = sorted(path for path in imported if path not in vault_notes)
+    last_import = max((str(row["imported_at"]) for row in rows if row["imported_at"]), default=None)
+    return {
+        "vault": str(Path(vault or VAULT)),
+        "vault_notes": len(vault_notes),
+        "imported_notes": len(imported),
+        "imported_current": len(vault_notes) - len(stale),
+        "brain_chunks": sum(int(row["chunks"]) for row in rows),
+        "stale": stale,
+        "orphans": orphans,
+        "last_import": last_import,
+        "source_counts": [dict(row) for row in counts],
+    }
 
 
 def plan_sync(state: dict) -> dict:
@@ -181,13 +300,11 @@ def plan_sync(state: dict) -> dict:
     )
     seen = set()
     vault_changed = 0
-    if VAULT.exists():
-        for path in VAULT.rglob("*.md"):
-            rel = path.relative_to(VAULT).as_posix()
-            key = "brain::" + rel
-            seen.add(key)
-            if files.get(key) != path.stat().st_mtime:
-                vault_changed += 1
+    for path, rel in iter_vault_notes():
+        key = "brain::" + rel
+        seen.add(key)
+        if files.get(key) != path.stat().st_mtime:
+            vault_changed += 1
     removed = sum(1 for key in files if key.startswith("brain::") and key not in seen)
     return {"seed_changed": seed_changed, "vault_changed": vault_changed, "removed": removed}
 

@@ -48,7 +48,7 @@ class RegistryAndNetworkPolicyTests(unittest.TestCase):
             "github_push", "github_fork", "github_pr_create", "github_pr_merge",
         }
 
-        self.assertEqual(len(ollama), 42)
+        self.assertEqual(len(ollama), 45)
         self.assertEqual(ollama, claude)
         self.assertTrue(new_tools <= set(ollama))
         self.assertTrue(github_tools <= set(ollama))

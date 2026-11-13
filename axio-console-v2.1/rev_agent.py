@@ -1253,7 +1253,7 @@ def _approve_registry_tool(tool, args: dict) -> bool:
     return input("  Allow? (y/n): ").strip().lower() == "y"
 
 
-REVREC_TOOLS = build_default_registry()
+REVREC_TOOLS = build_default_registry(include_brain=False)  # revrec memory stays isolated
 REVREC_TOOLS.register_many(build_finance_tools(TOOLS, TOOL_MAP), category="finance")
 
 

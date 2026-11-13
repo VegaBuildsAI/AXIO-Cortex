@@ -5,8 +5,14 @@ from __future__ import annotations
 from .registry import CodeTool, CodeToolRegistry, ToolResult, summarize_arguments
 
 
-def build_default_registry() -> CodeToolRegistry:
+def build_default_registry(include_brain: bool = True) -> CodeToolRegistry:
+    """Build the shared tool registry.
+
+    ``include_brain=False`` omits the shared-Cortex brain tools; revrec uses it
+    so its isolated memory never reaches the shared brain.
+    """
     from .artifact_tools import TOOLS as ARTIFACT_TOOLS
+    from .brain_tools import TOOLS as BRAIN_TOOLS
     from .document_tools import TOOLS as DOCUMENT_TOOLS
     from .browser_tools import TOOLS as BROWSER_TOOLS
     from .filesystem import TOOLS as FILESYSTEM_TOOLS
@@ -33,6 +39,8 @@ def build_default_registry() -> CodeToolRegistry:
     registry.register_many(WEB_TOOLS, category="web")
     registry.register_many(BROWSER_TOOLS, category="browser")
     registry.register_many(RETRIEVAL_TOOLS, category="retrieval")
+    if include_brain:
+        registry.register_many(BRAIN_TOOLS, category="brain")
     registry.register_many(SCAFFOLD_TOOLS, category="scaffold")
     return registry
 

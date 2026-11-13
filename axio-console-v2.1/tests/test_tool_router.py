@@ -22,7 +22,7 @@ from core.code_tools.router import (
 class ToolRouterTests(unittest.TestCase):
     def test_registry_preserves_42_tools_and_enriches_metadata(self):
         registry = build_default_registry()
-        self.assertEqual(len(registry.tools), 42)
+        self.assertEqual(len(registry.tools), 45)
         self.assertEqual(registry.get("web_search").category, "web")
         self.assertIn("RESEARCH", registry.get("web_search").task_types)
 
@@ -62,7 +62,7 @@ class ToolRouterTests(unittest.TestCase):
         first_names = {item["function"]["name"] for item in first}
         self.assertEqual(len(first_names), 8)
         self.assertIn("request_tool", first_names)
-        self.assertEqual(len(registry.tools), 42)
+        self.assertEqual(len(registry.tools), 45)
 
         hidden = "scaffold_project"
         result = router.handle_unavailable_call(
@@ -86,10 +86,10 @@ class ToolRouterTests(unittest.TestCase):
         registry = build_default_registry()
         router = DynamicToolRouter(registry, "create and verify a project file")
         names = {item["function"]["name"] for item in router.schemas("ollama")}
-        self.assertEqual(len(names), 42)
+        self.assertEqual(len(names), 45)
         self.assertEqual(names, {tool.name for tool in registry.tools})
         self.assertNotIn("request_tool", names)
-        self.assertEqual(len(router.exposed_names), 42)
+        self.assertEqual(len(router.exposed_names), 45)
         claude_names = {item["name"] for item in router.schemas("claude")}
         self.assertEqual(claude_names, names)
         self.assertIsNone(router.handle_unavailable_call("write_file", {"path": "ignored"}))

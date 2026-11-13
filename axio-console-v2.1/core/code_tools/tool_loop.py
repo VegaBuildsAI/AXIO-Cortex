@@ -2,7 +2,7 @@
 
 This is intentionally simpler than Code mode's full agentic harness (no dynamic
 tool router, verification gate, or completion nudges): it drives a bounded
-tool-calling conversation over a *subset* of the 42-tool registry, executes each
+tool-calling conversation over a *subset* of the 45-tool registry, executes each
 requested tool through the registry's own risk/approval gate, and returns the
 model's final text. Tools outside the allowed subset are refused with an
 ISOLATION_ERROR string (never raised), which is the same isolation guarantee the
@@ -88,6 +88,13 @@ def run_tool_loop(
     schemas = CODE_TOOL_REGISTRY.emit_subset(tools, provider) + list(extra_schemas)
     if approve is None:
         approve = interactive_approver
+    # Ollama has no separate system argument: carry `system` as the leading
+    # system message (unless the caller already supplied one), so local
+    # Chat/Cowork get the same instructions as the Claude path.
+    if provider == "ollama" and system and not (
+        messages and messages[0].get("role") == "system"
+    ):
+        messages.insert(0, {"role": "system", "content": system})
 
     def _run_call(name: str, raw_args) -> str:
         args = raw_args

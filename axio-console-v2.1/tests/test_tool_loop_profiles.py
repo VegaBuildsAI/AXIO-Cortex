@@ -49,7 +49,7 @@ class ProfileTests(unittest.TestCase):
 
     def test_code_profile_is_full_registry(self):
         self.assertEqual(set(profile_tool_names("code")), set(all_tool_names()))
-        self.assertEqual(len(all_tool_names()), 42)
+        self.assertEqual(len(all_tool_names()), 45)
 
     def test_unknown_names_are_dropped(self):
         # An unknown mode falls back to the full registry, not a crash.
@@ -65,6 +65,24 @@ class ToolLoopTests(unittest.TestCase):
             ollama=fake, messages=messages, verbose=False,
         )
         self.assertEqual(out, "hello there")
+
+    def test_ollama_receives_system_prompt_once(self):
+        fake = FakeOllama([_msg(content="ok")])
+        messages = [{"role": "user", "content": "hi"}]
+        run_tool_loop(
+            tool_names=CHAT_TOOLS, provider="ollama", model="x", ollama=fake,
+            messages=messages, system="SYS", verbose=False,
+        )
+        self.assertEqual(messages[0], {"role": "system", "content": "SYS"})
+        self.assertEqual(sum(1 for m in messages if m["role"] == "system"), 1)
+
+        preset = [{"role": "system", "content": "OWN"}, {"role": "user", "content": "hi"}]
+        run_tool_loop(
+            tool_names=CHAT_TOOLS, provider="ollama", model="x",
+            ollama=FakeOllama([_msg(content="ok")]), messages=preset,
+            system="SYS", verbose=False,
+        )
+        self.assertEqual([m["content"] for m in preset if m["role"] == "system"], ["OWN"])
 
     def test_executes_allowed_tool_then_finishes(self):
         # First turn asks to list_dir (a read tool, no approval), second finishes.

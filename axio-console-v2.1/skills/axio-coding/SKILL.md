@@ -27,6 +27,7 @@ Use the smallest relevant reference:
 - For the verification gate, `run_command`, and recovering from failed builds/tests, read `{{SKILL_ROOT}}\references\verification-and-recovery.md`.
 - For working on GitHub repos (branch, commit, push, fork, pull requests) with the `gh` CLI, read `{{SKILL_ROOT}}\references\github-workflow.md`.
 - For Second Brain routing, provenance, and privacy boundaries, read `{{SKILL_ROOT}}\references\second-brain-protocol.md`.
+- For looking things up in the shared Postgres Cortex brain (`brain_search`, `brain_read`, `brain_list`), read `{{SKILL_ROOT}}\references\brain.md`.
 - For version-sensitive APIs, read `{{SKILL_ROOT}}\references\official-docs.md` and verify the installed version with `inspect_python_environment`.
 
 ## Tool index (every tool has a reference)
@@ -44,6 +45,7 @@ validated by tests; adding or removing a tool requires updating that catalog.
 - Web — web_search, web_fetch, web_extract → `web-tools.md`
 - Browser — browser_open, browser_snapshot, browser_click → `browser-tools.md`
 - Retrieval — index_workspace, semantic_search, search_docs → `retrieval-tools.md`
+- Brain (Postgres Cortex, read-only) — brain_search, brain_read, brain_list → `brain.md`
 - Scaffold — scaffold_project, scaffold_module → `scaffold-tools.md`
 - Verification & shell — verification_gate, run_command → `verification-and-recovery.md`
 

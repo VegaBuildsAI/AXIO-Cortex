@@ -35,13 +35,13 @@ class CodingSkillRegistryTests(unittest.TestCase):
         catalog = load_tool_calling_skills()
         registered = {tool.name for tool in CODE_TOOL_REGISTRY.tools}
 
-        self.assertEqual(len(registered), 42)
+        self.assertEqual(len(registered), 45)
         self.assertEqual(set(catalog), registered)
         self.assertTrue(all(skill.when and skill.rules and skill.after for skill in catalog.values()))
 
         rendered = render_tool_calling_skills()
         prompt = build_coding_system_prompt("create and verify a file")
-        self.assertIn("Tool-Calling Skills (42/42)", rendered)
+        self.assertIn("Tool-Calling Skills (45/45)", rendered)
         self.assertIn("All registered tools are visible", prompt)
         self.assertIn("`read_file`", prompt)
         self.assertIn("`verification_gate`", prompt)
@@ -75,7 +75,7 @@ class CodingSkillRegistryTests(unittest.TestCase):
         import modes.gemma_code as gemma_mode
 
         self.assertIs(gemma_mode.TOOLS, code_mode.TOOLS)
-        self.assertEqual(len(gemma_mode.TOOLS), 42)
+        self.assertEqual(len(gemma_mode.TOOLS), 45)
 
     def test_plan_parser_is_bounded_and_normalizes_numbering(self):
         raw = "\n".join(f"{index}) [read_file] Step {index}" for index in range(1, 20))

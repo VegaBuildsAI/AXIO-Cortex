@@ -1,4 +1,4 @@
-"""Per-mode tool profiles over the single 42-tool registry.
+"""Per-mode tool profiles over the single 45-tool registry.
 
 Chat, Cowork, and Code all draw their tools from the same
 ``CODE_TOOL_REGISTRY``; a profile is just the subset of tool *names* a mode is
@@ -21,6 +21,8 @@ CHAT_TOOLS: tuple[str, ...] = (
     "create_docx", "create_xlsx", "create_pptx", "create_pdf",
     "web_search", "web_fetch", "web_extract",
     "browser_open", "browser_snapshot", "browser_click",
+    # Read-only lookups into the shared Postgres Cortex brain.
+    "brain_search", "brain_read", "brain_list",
 )
 
 # Cowork: everything Chat has, plus a robust workspace/file + retrieval +
@@ -52,7 +54,7 @@ _PROFILES: dict[str, tuple[str, ...]] = {
 def profile_tool_names(mode: str) -> tuple[str, ...]:
     """Resolve a mode name to its allowed tool names, dropping unknown names.
 
-    ``code`` (and any unknown mode) resolves to the full 42-tool registry.
+    ``code`` (and any unknown mode) resolves to the full 45-tool registry.
     """
     names = _PROFILES.get(mode.lower())
     if names is None:

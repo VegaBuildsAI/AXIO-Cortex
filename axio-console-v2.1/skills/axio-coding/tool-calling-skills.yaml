@@ -160,6 +160,18 @@ tools:
     when: Retrieve supported official library documentation for a version-sensitive implementation question.
     rules: [Verify installed version first, Prefer official sources, Label stale cached results]
     after: Cite the returned official source URL and reconcile it with local version evidence.
+  brain_search:
+    when: Answer a question about Michael's projects, people, decisions or history from the shared Postgres Cortex brain.
+    rules: [Search before saying something is unknown, Narrow with source when useful, Treat results as memory not live state]
+    after: Use brain_read on the best-matching note path when the snippet is not enough.
+  brain_read:
+    when: Read one whole imported Second Brain note from the Cortex by its vault-relative path.
+    rules: [Use an exact path from brain_search or brain_list, Never read vault files directly, Cite the note path]
+    after: Answer from the note and say which note it came from.
+  brain_list:
+    when: Browse which notes are imported (optionally under a folder) or check per-source chunk counts.
+    rules: [Use a folder prefix such as 01-Projects/, Prefer brain_search for topical questions]
+    after: Pick a path and call brain_read.
   scaffold_project:
     when: Create a requested standard project skeleton in a new empty destination.
     rules: [Use an absolute destination, Inspect the parent first, Never overwrite existing files]

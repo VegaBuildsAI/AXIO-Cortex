@@ -44,7 +44,9 @@ COWORK_SYSTEM = (
     "You are AXIO Cowork, a file-aware workspace assistant. You can read, edit, "
     "and create files; run and inspect Python/Node; search and index the "
     "workspace; read documents; use the web; and read git state. Prefer editing "
-    "files in the active workspace. Use tools when they help; otherwise answer."
+    "files in the active workspace. Use tools when they help; otherwise answer. "
+    "For questions about Michael's projects, people and decisions, use "
+    "brain_search (then brain_read for a full note) on the AXIO Cortex brain."
 )
 
 
@@ -384,7 +386,7 @@ def run():
                     result_text = run_tool_loop(
                         tool_names=COWORK_TOOLS, provider="ollama",
                         messages=[{"role": "user", "content": full_prompt}],
-                        ollama=ollama, model=picked,
+                        ollama=ollama, model=picked, system=COWORK_SYSTEM,
                         audit=audit, max_steps=COWORK_TOOL_STEPS,
                     )
                     print(f"  {result_text}")

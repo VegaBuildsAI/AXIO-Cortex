@@ -21,6 +21,35 @@ def shared_recall_modes(mode: str) -> list[str]:
     return modes
 
 
+def print_brain_status(status_fn=None) -> None:
+    """`memory brain`: read-only vault-vs-Postgres import status."""
+    try:
+        if status_fn is None:
+            from core.memory_runtime import brain_status as status_fn
+        status = status_fn()
+    except Exception as exc:
+        print(f"\n  Second Brain status unavailable (Cortex Postgres offline?): {exc}\n")
+        return
+    print("\n  Second Brain (Postgres Cortex):")
+    print(f"    vault (import source): {status['vault']}")
+    print(f"    notes in vault       : {status['vault_notes']}")
+    print(f"    notes imported       : {status['imported_notes']} "
+          f"({status['imported_current']}/{status['vault_notes']} current, "
+          f"{status['brain_chunks']} chunks)")
+    print(f"    stale                : {len(status['stale'])}")
+    for rel, why in status["stale"][:10]:
+        print(f"      - {rel} ({why})")
+    if len(status["stale"]) > 10:
+        print(f"      … +{len(status['stale']) - 10} more")
+    if status["orphans"]:
+        print(f"    in DB, not in vault  : {len(status['orphans'])}")
+    print(f"    last import          : {status['last_import'] or 'never'}")
+    print("    chunks per source:")
+    for row in status["source_counts"]:
+        print(f"      {row['mode']}/{row['source_type']}: {row['count']}")
+    print()
+
+
 class ModeMemorySession:
     def __init__(self, mode: str, allowed_recall_modes: list[str] = None):
         self.mode = mode
@@ -175,6 +204,9 @@ class ModeMemorySession:
             for row in rows:
                 print(f"    {row['mode']}/{row['source_type']}: {row['count']}")
             print()
+            return True
+        if lower == "memory brain":
+            print_brain_status()
             return True
         if lower in ("memory pending", "memory reconcile"):
             if lower == "memory reconcile":

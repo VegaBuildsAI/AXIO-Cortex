@@ -14,6 +14,8 @@ class RevRecToolHarnessTests(unittest.TestCase):
     def test_revrec_registry_adds_finance_tools_without_altering_code_registry(self):
         names = {tool.name for tool in rev_agent.REVREC_TOOLS.tools}
         self.assertEqual(len(names), 51)
+        # revrec memory is isolated: the shared-brain tools are never exposed.
+        self.assertFalse({"brain_search", "brain_read", "brain_list"} & names)
         self.assertTrue({
             "analyze_contract",
             "create_allocation_schedule",

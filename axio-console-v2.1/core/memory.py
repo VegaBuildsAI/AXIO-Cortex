@@ -47,12 +47,18 @@ try:
         MEMORY_DIR, CHROMA_DIR, OLLAMA_HOST,
         MEMORY_RECALL_RESULTS, MEMORY_SUMMARIZE, MEMORY_SUMMARY_MODEL,
         AXIO_MEMORY_BACKEND,
+        MEMORY_BRAIN_RECALL_RESULTS, MEMORY_BRAIN_CHUNK_CHARS,
+        SECOND_BRAIN_NAMESPACE, SECOND_BRAIN_SOURCE_TYPE,
     )
 except ImportError:
     MEMORY_DIR            = Path.home() / ".axio" / "memory"
     CHROMA_DIR            = Path.home() / ".axio" / "chroma-resilient"
     OLLAMA_HOST           = "http://127.0.0.1:11434"
     MEMORY_RECALL_RESULTS = 5
+    MEMORY_BRAIN_RECALL_RESULTS = 4
+    MEMORY_BRAIN_CHUNK_CHARS    = 1500
+    SECOND_BRAIN_NAMESPACE      = "console"
+    SECOND_BRAIN_SOURCE_TYPE    = "second_brain"
     MEMORY_SUMMARIZE      = True
     MEMORY_SUMMARY_MODEL  = "gemma4:12b"
     AXIO_MEMORY_BACKEND   = "json"
@@ -679,19 +685,53 @@ class MemoryManager:
             except Exception:
                 pass
 
-    def recall(self, query: str, n_results: int = None, allowed_modes: list[str] = None):
+    def _query_embedding(self, query: str):
+        """Embed a recall query, reusing the last vector for a repeated query.
+
+        build_memory_prefix() runs a general lookup and a Second Brain lookup
+        for the same query; this keeps that to one Ollama embedding call.
+        """
+        cached = getattr(self, "_last_query_embedding", None)
+        if cached and cached[0] == query and cached[1]:
+            return cached[1]
+        embedding = self._embed_via_ollama(query)
+        if embedding:
+            self._last_query_embedding = (query, embedding)
+        return embedding
+
+    def recall(
+        self,
+        query: str,
+        n_results: int = None,
+        allowed_modes: list[str] = None,
+        source_types: list[str] = None,
+    ):
+        """Recall the nearest chunks for `query`.
+
+        `source_types` narrows the lookup (e.g. ["second_brain"]). It is passed
+        to the backend only when set, so existing callers and backends are
+        unaffected. A filtered lookup skips outbox reconcile (the unfiltered
+        lookup that precedes it in the same turn already ran it) and never
+        falls back to structured-fact keyword hits, which have no source type.
+        """
         n = n_results or MEMORY_RECALL_RESULTS
         if self._postgres_backend:
             try:
-                self.reconcile_pending()
-                embedding = self._embed_via_ollama(query)
+                if not source_types:
+                    self.reconcile_pending()
+                embedding = self._query_embedding(query)
                 if embedding:
+                    if source_types:
+                        return self._postgres_backend.recall(
+                            embedding, n, modes=allowed_modes,
+                            source_types=list(source_types),
+                        )
                     return self._postgres_backend.recall(embedding, n, modes=allowed_modes)
             except Exception as exc:
                 _warn_pg_fallback(exc)
         if self._chroma:
             try:
-                embedding = self._embed_via_ollama(query)
+                embedding = self._query_embedding(query)
                 if embedding:
                     modes  = allowed_modes or [self.mode]
                     merged = []
@@ -705,10 +745,16 @@ class MemoryManager:
                             continue
                         if count == 0:
                             continue
+                        query_kwargs = {}
+                        if source_types:
+                            query_kwargs["where"] = {
+                                "source_type": {"$in": list(source_types)}
+                            }
                         results = coll.query(
                             query_embeddings=[embedding],
                             n_results=min(n, count),
                             include=["documents", "metadatas", "distances"],
+                            **query_kwargs,
                         )
                         docs  = results.get("documents",  [[]])[0]
                         metas = results.get("metadatas",  [[]])[0]
@@ -722,6 +768,8 @@ class MemoryManager:
                         return merged[:n]
             except Exception:
                 pass
+        if source_types:
+            return []
         return self._keyword_fallback(query, allowed_modes)
 
     def _keyword_fallback(self, query: str, allowed_modes: list[str] = None):
@@ -883,6 +931,46 @@ class MemoryManager:
     #  Memory prefix builder
     # -----------------------------------------------------------------------
 
+    @staticmethod
+    def _hit_source_type(hit: dict) -> str:
+        return str(
+            hit.get("source_type")
+            or (hit.get("metadata") or {}).get("source_type")
+            or ""
+        )
+
+    def _second_brain_section(
+        self, query: str, allowed_modes: list[str] = None, general_hits: list = ()
+    ) -> str:
+        """Top Second Brain chunks for `query`, minus those already shown."""
+        if MEMORY_BRAIN_RECALL_RESULTS <= 0:
+            return ""
+        if allowed_modes and SECOND_BRAIN_NAMESPACE not in allowed_modes:
+            return ""
+        seen = {str(h.get("text", "")) for h in general_hits if h.get("text")}
+        hits = self.recall(
+            query,
+            n_results=MEMORY_BRAIN_RECALL_RESULTS + len(seen),
+            allowed_modes=[SECOND_BRAIN_NAMESPACE],
+            source_types=[SECOND_BRAIN_SOURCE_TYPE],
+        ) or []
+        texts = []
+        for hit in hits:
+            text = str(hit.get("text") or "")
+            if not text or text in seen:
+                continue
+            if self._hit_source_type(hit) != SECOND_BRAIN_SOURCE_TYPE:
+                continue
+            seen.add(text)
+            if len(text) > MEMORY_BRAIN_CHUNK_CHARS:
+                text = text[:MEMORY_BRAIN_CHUNK_CHARS].rstrip() + " …[truncated; use brain_read for the full note]"
+            texts.append(text)
+            if len(texts) >= MEMORY_BRAIN_RECALL_RESULTS:
+                break
+        if not texts:
+            return ""
+        return "=== SECOND BRAIN ===\n" + "\n---\n".join(texts)
+
     def build_memory_prefix(self, query: str = "", allowed_modes: list[str] = None) -> str:
         parts = []
         facts = self.get_facts()
@@ -945,6 +1033,19 @@ class MemoryManager:
                         "=== RELEVANT MEMORY ===\n"
                         + "\n---\n".join(recall_texts[:MEMORY_RECALL_RESULTS])
                     )
+
+            # Dedicated Second Brain slots, so imported vault notes are not
+            # crowded out by session summaries. revrec stays isolated. Any
+            # failure leaves the prefix exactly as it was before this block.
+            if self.mode != "revrec":
+                try:
+                    brain = self._second_brain_section(
+                        query, allowed_modes, recalls or []
+                    )
+                    if brain:
+                        parts.append(brain)
+                except Exception:
+                    pass
 
         if not parts:
             return ""

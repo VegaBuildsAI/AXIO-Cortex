@@ -16,7 +16,7 @@ A local-first, multi-model AI orchestration platform on **Windows** — Michael'
 |------|---------------------------|---------------|---------|
 | Chat | local Ollama | `gemma4:12b` (Claude path uses `claude-haiku-4-5`) | Conversation w/ session memory + web-augmentation |
 | Cowork | local Ollama (premium routes → Claude) | `gemma4:12b` | File-aware workspace assistant + web-augmentation |
-| Code | **Claude API** | `claude-sonnet-4-6` (effort `high`) | Unified 42-tool coding agent: Plan Mode, skills, retrieval, web-evidence gate, GitHub PR workflow, artifact generation (docx/xlsx/pptx/pdf), scaffolds, verification gate |
+| Code | **Claude API** | `claude-sonnet-4-6` (effort `high`) | Unified 45-tool coding agent: Plan Mode, skills, retrieval, brain lookups, web-evidence gate, GitHub PR workflow, artifact generation (docx/xlsx/pptx/pdf), scaffolds, verification gate |
 | RevRec | local + boost | `gemma4:12b`, PDF/complex → Claude | ASC 606 / IFRS 15 revenue-recognition specialist (isolated memory) |
 
 Claude tiers (`CLAUDE_MODELS`): `sonnet`=claude-sonnet-4-6 (default), `opus`=claude-opus-4-8. In-app: `model opus max`, `effort xhigh`. `LOCAL_ONLY=1` = 100% on-device (Code uses the local fallback).
@@ -25,7 +25,7 @@ Claude tiers (`CLAUDE_MODELS`): `sonnet`=claude-sonnet-4-6 (default), `opus`=cla
 - **`axio.py`** — launcher / mode selector (chat · cowork · code · revrec).
 - **`core/config.py`** — all constants, paths, models, env, routing. **Source of truth.**
 - **`core/models.py`** — `OllamaClient`, `ClaudeClient`, `ModelRouter`.
-- **`core/code_tools/`** — the **42-tool** Code registry (`build_default_registry()` in `__init__.py`; count = `len(CODE_TOOL_REGISTRY.tools)`), categorized, with a full/dynamic tool router (`CODE_TOOL_ROUTING_MODE`, `router.py`) that controls tool visibility. Groups: filesystem, python, node, git, **github**, document, **artifact (create_docx/xlsx/pptx/pdf)**, shell, verification_gate, web, browser, retrieval, scaffold. Approval gate + risk levels in `registry.py`.
+- **`core/code_tools/`** — the **45-tool** Code registry (`build_default_registry()` in `__init__.py`; count = `len(CODE_TOOL_REGISTRY.tools)`), categorized, with a full/dynamic tool router (`CODE_TOOL_ROUTING_MODE`, `router.py`) that controls tool visibility. Groups: filesystem, python, node, git, **github**, document, **artifact (create_docx/xlsx/pptx/pdf)**, shell, verification_gate, web, browser, retrieval, **brain (brain_search/brain_read/brain_list, read-only Postgres Cortex; omitted from revrec)**, scaffold. Approval gate + risk levels in `registry.py`.
 - **`core/web_intent.py`** — web-evidence gate (detect current-info intent; block Code `TASK_COMPLETE` until a web tool succeeds) + `augment_with_web()` used by Chat/Cowork.
 - **`core/` memory (AXIO Cortex)** — `memory.py`, `self_memory.py`, `memory_runtime.py`, `mode_memory.py`, `memory_durability.py`, `memory_consolidation.py`, `db.py`, `memory_backends/postgres_backend.py`. **See `docs/CORTEX.md`.**
 - **`modes/`** — `chat.py`, `cowork.py`, `code.py` (real Code logic; `gemma_code.py` is a 10-line shim → `code.py`), `revrec.py`.
@@ -38,12 +38,12 @@ Claude tiers (`CLAUDE_MODELS`): `sonnet`=claude-sonnet-4-6 (default), `opus`=cla
 py axio.py [chat|cowork|code|revrec]     # launch (bare = mode menu)
 py axio.py --claude <mode>               # force Claude for the session (FORCE_CLAUDE=1)
 LOCAL_ONLY=1 py axio.py <mode>           # 100% on-device
-py -m pytest tests -q                    # test suite (145 tests)
+py -m pytest tests -q                    # test suite (261 tests)
 ```
 In-mode: `plan <task>` / `execute` (Code) · `model <sonnet|opus> [effort]` · `memory` · `clear` · `help` · `exit`.
 
 ## Environment (`.env`; defaults in `core/config.py`)
-`ANTHROPIC_API_KEY` (req) · `CLAUDE_MODEL=claude-sonnet-4-6` · `CLAUDE_MODEL_CHAT=claude-haiku-4-5-20251001` · `CLAUDE_MAX_TOKENS=16000` · `CLAUDE_EFFORT=high` · `LOCAL_ONLY` · `OLLAMA_HOST=127.0.0.1:11434` · `MODEL_*` (all default `gemma4:12b`) · `MEMORY_SUMMARY_MODEL=gemma4:12b` · `MEMORY_EMBED_MODEL=nomic-embed-text:latest` (768-dim, **do not change**) · `AXIO_MEMORY_BACKEND` (default `json`; `postgres` for live Cortex) · `AXIO_DB_*` (axio_cortex@127.0.0.1:5432) · `AXIO_SEARXNG_URL=127.0.0.1:8080`.
+`ANTHROPIC_API_KEY` (req) · `CLAUDE_MODEL=claude-sonnet-4-6` · `CLAUDE_MODEL_CHAT=claude-haiku-4-5-20251001` · `CLAUDE_MAX_TOKENS=16000` · `CLAUDE_EFFORT=high` · `LOCAL_ONLY` · `OLLAMA_HOST=127.0.0.1:11434` · `MODEL_*` (all default `gemma4:12b`) · `MEMORY_SUMMARY_MODEL=gemma4:12b` · `MEMORY_EMBED_MODEL=nomic-embed-text:latest` (768-dim, **do not change**) · `AXIO_MEMORY_BACKEND` (default `json`; `postgres` for live Cortex) · `AXIO_DB_*` (axio_cortex@127.0.0.1:5433 — 5432 is taken by axio-clinical-db) · `AXIO_SEARXNG_URL=127.0.0.1:8080` · `MEMORY_IVFFLAT_PROBES=100` (exact pgvector recall) · `MEMORY_BRAIN_RECALL_RESULTS=4` / `MEMORY_BRAIN_CHUNK_CHARS=1500` (`=== SECOND BRAIN ===` prompt section) · `SECOND_BRAIN_VAULT` (read-only import source) · `BRAIN_READ_MAX_CHARS=40000`.
 
 ## Do NOT
 - Hardcode constants outside `core/config.py`; edit `rev_agent.py`'s system prompt; remove `modes/gemma_code.py` (shim used by `tests/test_coding_skills.py`); change `MEMORY_EMBED_MODEL` (breaks the 768-dim vector store); trust May-era docs (`CHANGES.md`, `FIXES_SUMMARY.md`, `IMPROVEMENTS.md`) for current state.

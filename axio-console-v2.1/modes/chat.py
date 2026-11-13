@@ -39,7 +39,9 @@ CHAT_TOOL_STEPS = 4
 CHAT_SYSTEM = (
     "You are AXIO Chat, a helpful assistant. You can read and write files, "
     "create Word/Excel/PowerPoint/PDF documents, and search, fetch, and browse "
-    "the web. Use a tool only when it genuinely helps; otherwise just answer."
+    "the web. Use a tool only when it genuinely helps; otherwise just answer. "
+    "For questions about Michael's projects, people and decisions, use "
+    "brain_search (then brain_read for a full note) on the AXIO Cortex brain."
 )
 from core.ui           import (
     mode_banner, status_line, divider,
@@ -296,7 +298,7 @@ def run(initial_model: str = "", initial_session: str = None):
 
             divider()
             response = ""
-            # Tools draw from the chat profile of the 42-tool registry; the
+            # Tools draw from the chat profile of the 45-tool registry; the
             # registry's own risk/approval gate still guards every call. Scope
             # the workspace to cwd so in-directory writes don't prompt.
             CODE_TOOL_REGISTRY.start_task(prompt, [Path.cwd()])
@@ -326,7 +328,7 @@ def run(initial_model: str = "", initial_session: str = None):
                     response = run_tool_loop(
                         tool_names=CHAT_TOOLS, provider="ollama",
                         messages=list(messages), ollama=ollama, model=cur_model,
-                        audit=audit, max_steps=CHAT_TOOL_STEPS,
+                        system=CHAT_SYSTEM, audit=audit, max_steps=CHAT_TOOL_STEPS,
                     )
                     print(f"  {response}")
                 except Exception:
