@@ -33,20 +33,23 @@
 
 <!-- AUTO-SNAPSHOT:BEGIN -->
 ### Snapshot (auto)
-- Updated: 2026-10-13 19:26 UTC
-- Branch: `feat/axio-console-ui-redesign`
+- Updated: 2026-11-13 06:25 UTC
+- Branch: `integration/axio-live`
 - Recent commits:
-  - d087dcb feat(ui): redesign AXIO Console — dark theme, one-window layout, runtime backend toggle, multi-agent bridge
+  - 2c98085 Merge feat/agent-tool-efficiency into integration/axio-live
+  - 80fa4f5 feat(agents): fewer prompt tokens and faster local tool calling
+  - 69a51cb feat(memory): give the local LLM a complete Second Brain from the Postgres Cortex
   - 129dbe6 Revert "feat: connect sales-intake to opportunity gateway"
   - 98715a9 feat: connect sales-intake to opportunity gateway
-  - c6120b5 Make Code-mode step budget configurable + fix two agent-loop gaps
-  - 3ecab0c Fix Code mode freezing/exiting on long-running npm scripts
-- Uncommitted (4 files changed, 15 insertions(+), 28 deletions(-)):
-  M AXIO_CORTEX_MEMORY.md
-   M CLAUDE.md
+- Uncommitted (5 files changed, 33 insertions(+), 14 deletions(-)):
+  M core/memory_consolidation.py
    M docs/CORTEX.md
-   M docs/STATE.md
+   M run_memory_runtime.cmd
+   M scripts/install_memory_tasks.ps1
+   M tests/test_memory_consolidation.py
+  ?? .claude/
   ?? TETRIS/
+  ?? workspaces/RACER_HOWTO.md
   ?? workspaces/racer/
   ?? workspaces/tetris/
 <!-- AUTO-SNAPSHOT:END -->
