@@ -30,7 +30,11 @@ class ExitConsolidationTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["AXIO_MEMORY_BACKEND"], "postgres")
         self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
         if os.name == "nt":
-            self.assertIn("creationflags", kwargs)
+            flags = kwargs["creationflags"]
+            self.assertTrue(flags & subprocess.CREATE_NO_WINDOW)
+            # DETACHED_PROCESS would cancel CREATE_NO_WINDOW and let the venv
+            # launcher's interpreter open a visible console window.
+            self.assertFalse(flags & subprocess.DETACHED_PROCESS)
         else:
             self.assertTrue(kwargs["start_new_session"])
 

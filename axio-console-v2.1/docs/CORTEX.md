@@ -47,7 +47,7 @@ The only backend class is `core/memory_backends/postgres_backend.py` (`PostgresM
 - **Schema (outside repo):** `C:\Users\AXIO\AXIO Model Improvement\docker-compose.yml` + `docker/postgres/init/001_schema.sql`, `002_indexes.sql` (container `axio-cortex-postgres`, image `pgvector/pgvector:pg16`). Tables: `sessions`, `messages`, `memory_facts`, `memory_embeddings (vector(768))`, `audit_logs`, `benchmark_runs`, `model_scores`.
 
 ## Scheduled automation (Windows, single-writer)
-`AXIO Cortex Startup` (logon) · `AXIO Memory Sync` (19:45, `--once --sync-only`) · `AXIO Memory Consolidate` (02:00, `--once --consolidate-only`) · `AXIO Cortex Backup` (02:30, `pg_dump` + retention).
+`AXIO Cortex Startup` (logon) · `AXIO Memory Sync` (every 30 min, `--once --sync-only`) · `AXIO Memory Consolidate` (02:00, `--once --consolidate-only`) · `AXIO Cortex Backup` (02:30, `pg_dump` + retention). All four run hidden through `conhost.exe --headless` (`scripts/install_memory_tasks.ps1`); Sync/Consolidate go through `run_memory_runtime.cmd`, which appends output to `logs/memory_runtime_task.log`. After each Chat/Cowork/Code session, `trigger_exit_consolidation()` also starts one hidden `--once --consolidate-only` run (uses the local model).
 
 ## What works vs pending
 - **Verified working** (per `CLAUDE_CODE_CORTEX_MEMORY_AUDIT_HANDOFF.md`): Postgres-primary + local mirror, persist-before-inference, durable outbox + idempotent replay + dead-lettering, per-mode isolation, deterministic `global_profile`, Postgres↔Chroma parity, continuous self-memory engine. ~491 embeddings, 0 pending at handoff; full suite green.

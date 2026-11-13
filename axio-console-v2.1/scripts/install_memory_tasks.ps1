@@ -6,8 +6,13 @@ $PythonExe = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $RuntimeScript = Join-Path $ProjectRoot "scripts\axio_memory_runtime.py"
 $StartupScript = Join-Path $ProjectRoot "start_axio_memory.cmd"
 $BackupScript = Join-Path $ProjectRoot "scripts\backup_cortex.ps1"
+$RuntimeLauncher = Join-Path $ProjectRoot "run_memory_runtime.cmd"
+# Every task runs through a headless console host, so no window opens (and
+# none can be closed by accident, which used to kill runs mid-way). Memory
+# runtime output goes to logs\memory_runtime_task.log via run_memory_runtime.cmd.
+$Conhost = Join-Path $env:SystemRoot "System32\conhost.exe"
 
-foreach ($Path in @($PythonExe, $RuntimeScript, $StartupScript, $BackupScript)) {
+foreach ($Path in @($PythonExe, $RuntimeScript, $StartupScript, $BackupScript, $RuntimeLauncher, $Conhost)) {
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Required AXIO path not found: $Path"
     }
@@ -24,8 +29,8 @@ $Settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
 $StartupAction = New-ScheduledTaskAction `
-    -Execute "cmd.exe" `
-    -Argument "/c `"$StartupScript`"" `
+    -Execute $Conhost `
+    -Argument "--headless cmd.exe /c `"$StartupScript`"" `
     -WorkingDirectory $ProjectRoot
 $StartupTrigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
 Register-ScheduledTask `
@@ -35,8 +40,8 @@ Register-ScheduledTask `
     -Principal $Principal -Settings $Settings -Force | Out-Null
 
 $SyncAction = New-ScheduledTaskAction `
-    -Execute $PythonExe `
-    -Argument "`"$RuntimeScript`" --once --sync-only" `
+    -Execute $Conhost `
+    -Argument "--headless cmd.exe /c `"$RuntimeLauncher`" --once --sync-only" `
     -WorkingDirectory $ProjectRoot
 $SyncTrigger = New-ScheduledTaskTrigger `
     -Once `
@@ -50,8 +55,8 @@ Register-ScheduledTask `
     -Principal $Principal -Settings $Settings -Force | Out-Null
 
 $ConsolidateAction = New-ScheduledTaskAction `
-    -Execute $PythonExe `
-    -Argument "`"$RuntimeScript`" --once --consolidate-only" `
+    -Execute $Conhost `
+    -Argument "--headless cmd.exe /c `"$RuntimeLauncher`" --once --consolidate-only" `
     -WorkingDirectory $ProjectRoot
 $ConsolidateTrigger = New-ScheduledTaskTrigger -Daily -At "02:00"
 Register-ScheduledTask `
@@ -61,8 +66,8 @@ Register-ScheduledTask `
     -Principal $Principal -Settings $Settings -Force | Out-Null
 
 $BackupAction = New-ScheduledTaskAction `
-    -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$BackupScript`"" `
+    -Execute $Conhost `
+    -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$BackupScript`"" `
     -WorkingDirectory $ProjectRoot
 $BackupTrigger = New-ScheduledTaskTrigger -Daily -At "02:30"
 Register-ScheduledTask `

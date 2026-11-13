@@ -40,9 +40,14 @@ def trigger_exit_consolidation() -> bool:
         "close_fds": True,
     }
     if os.name == "nt":
+        # CREATE_NO_WINDOW gives the child a hidden console that the venv
+        # launcher's real python.exe inherits. Do NOT add DETACHED_PROCESS:
+        # Windows ignores CREATE_NO_WINDOW alongside it, the launcher then has
+        # no console, and the interpreter it starts opens a visible window.
+        # A new process group keeps the parent's Ctrl+C from reaching it.
         kwargs["creationflags"] = (
             getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         )
     else:
         kwargs["start_new_session"] = True
