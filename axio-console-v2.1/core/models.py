@@ -26,11 +26,49 @@ from .config import (
 class OllamaClient:
     """Connects to a local Ollama instance with retry logic."""
 
-    def __init__(self, host=None):
+    def __init__(self, host=None, keep_alive=None):
         self.host = (host or OLLAMA_HOST).rstrip("/")
         self._thinking_cache = {}
         self.last_usage = None
         self.last_done_reason = None
+        # None = Ollama's default (5 min). Interactive modes pass
+        # OLLAMA_KEEP_ALIVE_INTERACTIVE ("-1" = stay loaded) and call
+        # unload_kept() on exit; background jobs leave it unset.
+        self.keep_alive = keep_alive
+        self._kept_models: set[str] = set()
+
+    def _apply_keep_alive(self, payload: dict) -> dict:
+        value = self.keep_alive
+        if value is None or str(value).strip() == "":
+            return payload
+        text = str(value).strip()
+        try:
+            payload["keep_alive"] = int(text)  # Ollama: number = seconds, -1 = forever
+        except ValueError:
+            payload["keep_alive"] = text       # duration string such as "30m"
+        if payload.get("model"):
+            self._kept_models.add(payload["model"])
+        return payload
+
+    def unload_kept(self) -> list[str]:
+        """Free every model this client asked Ollama to keep loaded."""
+        freed = [model for model in sorted(self._kept_models) if self.unload(model)]
+        self._kept_models.clear()
+        return freed
+
+    def unload(self, model) -> bool:
+        """Ask Ollama to free `model` now (keep_alive 0). Best-effort."""
+        if not model:
+            return False
+        try:
+            r = requests.post(
+                f"{self.host}/api/generate",
+                json={"model": model, "keep_alive": 0},
+                timeout=10,
+            )
+            return r.ok
+        except Exception:
+            return False
 
     @staticmethod
     def _generation_options(extra=None):
@@ -89,6 +127,7 @@ class OllamaClient:
         }
         if self._supports_thinking(model):
             payload["think"] = False
+        self._apply_keep_alive(payload)
         for attempt in range(RETRY_ATTEMPTS):
             try:
                 r = requests.post(
@@ -135,6 +174,7 @@ class OllamaClient:
         }
         if self._supports_thinking(model):
             payload["think"] = False
+        self._apply_keep_alive(payload)
         start = time.time()
         r = requests.post(OLLAMA_GEN, json=payload, stream=True, timeout=TIMEOUT)
         r.raise_for_status()
@@ -164,6 +204,7 @@ class OllamaClient:
         }
         if self._supports_thinking(model):
             payload["think"] = False
+        self._apply_keep_alive(payload)
         for attempt in range(RETRY_ATTEMPTS):
             try:
                 r = requests.post(

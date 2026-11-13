@@ -30,12 +30,14 @@ from core.ui      import (
     CYAN, YELLOW, GREEN, RED, DIM, BOLD, RESET, ok, warn, err, hi, lo
 )
 from core.config       import TEXT_EXTENSIONS, MAX_FILE_CHARS, MODELS, CLAUDE_MODEL, LOCAL_ONLY
+from core.config       import OLLAMA_KEEP_ALIVE_INTERACTIVE
 from core.file_context import SESSION_CONTEXT
 from core.console_input import capture_summary, is_multiline_command, read_multiline_input
 from core.mode_memory  import ModeMemorySession
 from core.code_tools   import CODE_TOOL_REGISTRY
 from core.code_tools.tool_loop import run_tool_loop
 from core.code_tools.profiles  import COWORK_TOOLS
+from core.approval import handle_auto_command
 
 # Cowork is a robust workspace assistant: a larger tool budget than Chat, but
 # still bounded. The registry's approval gate guards execute/destructive tools.
@@ -186,6 +188,7 @@ HELP = f"""
 
 {BOLD}Console commands:{RESET}
   {YELLOW}paste{RESET}               Capture multiline text; finish with ::end
+  {YELLOW}auto on|all|off{RESET}     Tool approvals: on = no asking (delete/push still ask); all = never ask
   {YELLOW}help{RESET} / {YELLOW}exit{RESET}
 """
 
@@ -198,7 +201,7 @@ def run():
     """Entry point called by axio.py."""
     mode_banner("cowork", "File-aware workspace assistant  |  Smart model routing")
 
-    ollama = OllamaClient()
+    ollama = OllamaClient(keep_alive=OLLAMA_KEEP_ALIVE_INTERACTIVE)
     logger = AuditLogger("cowork")
     ws     = WorkspaceState()
     memory = ModeMemorySession("cowork")
@@ -258,6 +261,10 @@ def run():
             break
 
         elif lower.startswith("memory") and memory.handle_command(lower):
+            continue
+
+        elif (auto_reply := handle_auto_command(lower)) is not None:
+            print(f"  {auto_reply}\n")
             continue
 
         elif lower == "help":
@@ -413,3 +420,7 @@ def run():
                 workspace=str(ws.root) if ws.root else None,
                 loaded_files=list(ws.loaded_files.keys()),
             )
+
+    # Free the model(s) this session kept loaded (keep_alive=-1), so the
+    # ~8 GB of shared GPU memory is released when the mode closes.
+    ollama.unload_kept()

@@ -17,6 +17,7 @@ Commands:
   /clear             Clear message history
   /delete <name>     Delete a saved session
   /info              Show current session info
+  /auto on|all|off   Tool approvals (on: no asking, delete/push still ask)
   /exit              Save and quit
 """
 
@@ -26,7 +27,8 @@ from core.logger       import AuditLogger
 from core.file_context import SESSION_CONTEXT
 from core.web_intent   import augment_with_web
 from core.console_input import capture_summary, is_multiline_command, read_multiline_input
-from core.config       import MODELS, LOCAL_ONLY
+from core.config       import MODELS, LOCAL_ONLY, OLLAMA_KEEP_ALIVE_INTERACTIVE
+from core.approval     import handle_auto_command
 from core.mode_memory  import ModeMemorySession
 from core.code_tools   import CODE_TOOL_REGISTRY
 from core.code_tools.tool_loop import run_tool_loop
@@ -63,6 +65,7 @@ HELP = f"""
   {YELLOW}/clear{RESET}             Clear message history
   {YELLOW}/delete <name>{RESET}     Delete a saved session
   {YELLOW}/info{RESET}              Session info
+  {YELLOW}/auto on|all|off{RESET}   Tool approvals: on = no asking (delete/push still ask); all = never ask
   {YELLOW}/exit{RESET}              Save and quit
 """
 
@@ -84,7 +87,7 @@ def run(initial_model: str = "", initial_session: str = None):
     """Entry point called by axio.py."""
     mode_banner("chat", "General-purpose conversational AI  |  Ollama + Claude")
 
-    ollama = OllamaClient()
+    ollama = OllamaClient(keep_alive=OLLAMA_KEEP_ALIVE_INTERACTIVE)
     sm     = SessionManager()
     logger = AuditLogger("chat")
     memory = ModeMemorySession("chat")
@@ -155,6 +158,10 @@ def run(initial_model: str = "", initial_session: str = None):
                 break
 
             elif cmd.startswith("/memory") and memory.handle_command(prompt[1:]):
+                continue
+
+            elif cmd == "/auto":
+                print(f"  {handle_auto_command(prompt) or 'Usage: /auto on|all|off'}\n")
                 continue
 
             elif cmd == "/help":
@@ -347,3 +354,7 @@ def run(initial_model: str = "", initial_session: str = None):
             sm.save(session)
             memory.record_turn(prompt, response, model=cur_model, metadata={"backend": cur_backend})
             logger.log_turn(prompt, response, cur_model, route=cur_backend)
+
+    # Free the model(s) this session kept loaded (keep_alive=-1), so the
+    # ~8 GB of shared GPU memory is released when the mode closes.
+    ollama.unload_kept()

@@ -384,7 +384,9 @@ class CodeToolRegistry:
 _CORE_TOOL_FLOOR = ("read_file", "list_dir", "search_files", "verification_gate")
 
 _TASK_TOOL_PRIORITY: dict[str, tuple[str, ...]] = {
-    "CODE_EDIT": ("edit_file", "write_file", "run_python", "apply_patch", "run_npm_script"),
+    # run_command ranks before run_python: build-and-verify tasks compile and
+    # run self-tests through it, and dynamic routing keeps only the first three.
+    "CODE_EDIT": ("edit_file", "write_file", "run_command", "run_python", "apply_patch", "run_npm_script"),
     "DEBUGGING": ("grep_files", "run_command", "edit_file", "git_diff", "run_python"),
     "RESEARCH": ("web_search", "web_fetch", "web_extract", "search_docs", "semantic_search"),
     "PLANNING": ("grep_files", "search_docs", "git_diff", "semantic_search", "web_search"),

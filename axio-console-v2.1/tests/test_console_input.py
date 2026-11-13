@@ -136,6 +136,9 @@ class ConsoleMultilineInputTests(unittest.TestCase):
 
     def test_chat_loop_sends_multiline_capture_as_one_exact_turn(self):
         class FakeOllama:
+            def __init__(self, *args, **kwargs):
+                self.unloaded = False
+
             def list_models(self):
                 return []
 
@@ -145,6 +148,10 @@ class ConsoleMultilineInputTests(unittest.TestCase):
             def chat_stream(self, _model, messages):
                 self.messages = messages
                 return "answer"
+
+            def unload_kept(self):
+                self.unloaded = True
+                return []
 
         memory = _FakeMemory()
         inputs = iter(["/paste", "first", "second", "::end", "/exit"])
@@ -167,12 +174,18 @@ class ConsoleMultilineInputTests(unittest.TestCase):
 
     def test_cowork_loop_does_not_execute_command_like_multiline_content(self):
         class FakeOllama:
+            def __init__(self, *args, **kwargs):
+                pass
+
             def is_running(self):
                 return True
 
             def generate_stream(self, _model, prompt):
                 self.prompt = prompt
                 return "answer", 0.1
+
+            def unload_kept(self):
+                return []
 
         memory = _FakeMemory()
         inputs = iter(["paste", "/help", "second", "::end", "exit"])

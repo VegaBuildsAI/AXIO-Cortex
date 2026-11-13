@@ -45,6 +45,12 @@ OLLAMA_GEN  = f"{OLLAMA_HOST}/api/generate"
 OLLAMA_TAGS = f"{OLLAMA_HOST}/api/tags"
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "8192"))
+# How long Ollama keeps a model loaded after an INTERACTIVE request (Chat,
+# Cowork, Code, RevRec). "-1" = never unload while AXIO is open; each mode
+# unloads its model on clean exit. Reloading gemma4:12b costs ~7 s. Background
+# jobs (memory runtime, consolidation) don't send this, so they keep Ollama's
+# default 5-minute unload and never pin the model overnight.
+OLLAMA_KEEP_ALIVE_INTERACTIVE = os.getenv("OLLAMA_KEEP_ALIVE_INTERACTIVE", "-1").strip()
 
 # Local models by role -- override with env vars (.env MODEL_* wins).
 # HYBRID SCHEME: gemma4:12b is the local base; the agentic tier (code / reasoning
@@ -126,10 +132,40 @@ INPUT_MAX_CHARS = int(
 CODE_INPUT_MAX_CHARS = INPUT_MAX_CHARS  # backward-compatible public alias
 CODE_PYTHON_TIMEOUT  = int(os.getenv("AXIO_CODE_PYTHON_TIMEOUT", "120"))
 CODE_NODE_TIMEOUT    = int(os.getenv("AXIO_CODE_NODE_TIMEOUT", "300"))
-CODE_TOOL_ROUTING_MODE = os.getenv("AXIO_CODE_TOOL_ROUTING_MODE", "full").strip().lower()
-if CODE_TOOL_ROUTING_MODE not in {"full", "dynamic"}:
-    CODE_TOOL_ROUTING_MODE = "full"
+# Which tool schemas the Code agent sees each step:
+#   auto    = dynamic for local Ollama runs, full for Claude (default)
+#   dynamic = a stable ~8-tool subset per task plus tools the model requests
+#   full    = all registered tools every step
+CODE_TOOL_ROUTING_MODES = ("auto", "full", "dynamic")
+CODE_TOOL_ROUTING_MODE = os.getenv("AXIO_CODE_TOOL_ROUTING_MODE", "auto").strip().lower()
+if CODE_TOOL_ROUTING_MODE not in CODE_TOOL_ROUTING_MODES:
+    CODE_TOOL_ROUTING_MODE = "auto"
+
+
+def routing_mode_for(provider: str) -> str:
+    """Resolve the routing mode for one backend ("ollama" or "claude").
+
+    Read at call time so an in-session env change takes effect. Local runs pay
+    for every prompt token on the iGPU, so `auto` keeps them on the small
+    dynamic subset; Claude prompt-caches the full schema list cheaply.
+    """
+    mode = os.getenv("AXIO_CODE_TOOL_ROUTING_MODE", CODE_TOOL_ROUTING_MODE).strip().lower()
+    if mode not in CODE_TOOL_ROUTING_MODES:
+        mode = "auto"
+    if mode == "auto":
+        return "dynamic" if (provider or "").strip().lower() == "ollama" else "full"
+    return mode
 CODE_COMMAND_TIMEOUT = int(os.getenv("AXIO_CODE_COMMAND_TIMEOUT", "120"))
+# Tool approval policy for agents (core/approval.py); switch at runtime with
+# `auto on|all|off` in any mode.
+#   off = ask y/n for every gated tool (default)
+#   on  = auto-approve execute + out-of-workspace writes; still ask for
+#         destructive (delete) and external (push/fork/PR/merge) actions
+#   all = auto-approve everything, including destructive and external
+AUTO_APPROVE_LEVELS = ("off", "on", "all")
+AXIO_AUTO_APPROVE = os.getenv("AXIO_AUTO_APPROVE", "off").strip().lower()
+if AXIO_AUTO_APPROVE not in AUTO_APPROVE_LEVELS:
+    AXIO_AUTO_APPROVE = "off"
 
 # ---------------------------------------------------------
 #  CODE WEB / BROWSER / RETRIEVAL
